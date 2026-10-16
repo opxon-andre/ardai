@@ -1,0 +1,25 @@
+#!/bin/sh
+# orchestrator-pre-push
+# Blockiert Pushes nach main, wenn sie aus einem verknüpften Worktree oder einem vom
+# Orchestrator gestarteten Agenten kommen. Menschliche Pushes aus dem
+# Haupt-Worktree bleiben unberührt. Installiert von "orchestrator.mjs init".
+agent=""
+worktree_root=__ARDAI_WORKTREE_ROOT__
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+case "$repo_root/" in
+  "$worktree_root/"*) agent=1 ;;
+esac
+# Git identifies linked worktrees independently of project/worktree directory names.
+git_dir=$(git rev-parse --git-dir 2>/dev/null)
+common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+[ "$git_dir" != "$common_dir" ] && agent=1
+[ -n "$ORCHESTRATOR_AGENT" ] && agent=1
+[ -z "$agent" ] && exit 0
+
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    echo "pre-push: Push nach main ist für Agenten gesperrt (Orchestrator-Regel)." >&2
+    exit 1
+  fi
+done
+exit 0

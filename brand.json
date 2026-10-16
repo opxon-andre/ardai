@@ -1,0 +1,16 @@
+{
+  "name": "ardai",
+  "cli": "ardai",
+  "aliases": [],
+  "configFile": "ardai.config.json",
+  "protocolAddendum": "ardai.protocol.md",
+  "runtimeDir": ".orchestrator",
+  "stoppedLabel": "ardai:stopped",
+  "processName": "ardai",
+  "legacyNames": {
+    "configFiles": [],
+    "protocolFiles": [],
+    "stoppedLabels": [],
+    "agentIds": []
+  }
+}

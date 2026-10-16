@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "resultsDir": "testing/results",
+  "keyPattern": "PROJ-\\d+",
+  "exampleDomains": [
+    "Backend/Api/"
+  ],
+  "agents": {
+    "codex": {
+      "preferredDomains": [
+        "Backend/"
+      ]
+    },
+    "claude": {
+      "preferredDomains": [
+        "Frontend/"
+      ]
+    }
+  }
+}

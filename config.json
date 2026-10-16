@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 2,
+  "resultsDir": ".orchestrator/results",
+  "keyPattern": "[A-Z][A-Z0-9]+-\\d+",
+  "exampleDomains": ["src/component/"],
+  "hooks": { "prePush": null },
+  "jiraBaseUrl": "",
+  "language": "de",
+  "ui": { "enabled": true, "port": 4711 },
+  "source": { "type": "jira", "cloudId": "", "todoStatus": "To Do" },
+  "worktreeRoot": "../ardai-worktrees",
+  "integrationBranch": "integration",
+  "baseBranch": "main",
+  "remote": "origin",
+  "tickSeconds": 30,
+  "autoStartRunner": false,
+  "maxRunMinutes": 120,
+  "maxAttempts": 3,
+  "fallbackBackoffMinutes": 30,
+  "quotaThresholdPercent": 97,
+  "reimportMinutes": 30,
+  "phaseTests": { "skipEpics": [] },
+  "phaseTestLocalSecrets": null,
+  "phaseTestComposeProject": "ardai-phasetest",
+  "contextDocs": [],
+  "codeGraph": {},
+  "agents": {
+    "claude": {
+      "kind": "claude",
+      "enabled": true,
+      "command": "claude",
+      "args": ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--disallowedTools", "mcp__atlassian"],
+      "preferredDomains": [],
+      "bySize": { "S": { "label": "Sonnet", "args": ["--model", "sonnet"] } },
+      "allowOverage": false
+    },
+    "codex": {
+      "kind": "codex",
+      "enabled": true,
+      "command": "codex",
+      "fallbackCommand": "codex",
+      "args": ["exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "-c", "model=\"gpt-6.1-sol\"", "-c", "model_reasoning_effort=\"medium\""],
+      "sessionsDir": "%USERPROFILE%\\.codex\\sessions",
+      "preferredDomains": [],
+      "bySize": { "S": { "label": "Reasoning low", "args": ["-c", "model_reasoning_effort=\"low\""] } }
+    }
+  }
+}

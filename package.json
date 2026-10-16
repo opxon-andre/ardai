@@ -1,0 +1,22 @@
+{
+  "name": "ardai",
+  "private": true,
+  "license": "MIT",
+  "author": "opXon GmbH, Andre Joswig",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "version": "0.1.0",
+  "description": "Unattended Claude Code and Codex orchestration in isolated Git worktrees.",
+  "bin": {
+    "ardai": "orchestrator.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/opxon-andre/ardai.git"
+  }
+}
