@@ -274,6 +274,12 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `baseBranch` | `"main"` | Initial branch for creating integration. |
 | `remote` | `"origin"` | Git remote for fetch/push. |
 | `tickSeconds` | `30` | Scheduler polling interval in seconds. |
+| `checkpointMinutes` | `10` | Minutes between automatic snapshots of running tasks under `refs/ardai/wip/<task>` (temporary index, agent branch untouched); 0 disables. |
+| `ollama` | object (see child fields) | Optional local model that rewrites the review comment; off by default. |
+| `ollama.enabled` | `false` | Use Ollama for review-comment drafts; any failure falls back to the template text. |
+| `ollama.url` | `"http://localhost:11434"` | Ollama server address. |
+| `ollama.model` | `"qwen2.5:1.5b"` | Model name; small models suit CPU-only machines. |
+| `ollama.timeoutSeconds` | `60` | Timeout per request; on expiry the template text is used. |
 | `autoStartRunner` | `false` | Allow retry/answer to start a background run for the entire state; --start overrides per call. |
 | `maxRunMinutes` | `120` | Agent run timeout in minutes; timeout interrupts task. |
 | `maxAttempts` | `3` | Failed-attempt limit before failed and a blocking question; quota outages do not count. |
@@ -323,7 +329,7 @@ These are optional runtime/loader settings not present in the raw default config
 | `protocolAddendum` | `"ardai.protocol.md"` | Without explicit setting: brand filename, then legacyNames.protocolFiles; explicit missing path loads no addendum. |
 | `source.stoppedLabel` | `"ardai:stopped"` | Stop label; also recognize brand.legacyNames.stoppedLabels and remove them on resume/clean. |
 | `source.jiraEmail` | `""` | Atlassian account e-mail for direct REST access (env `ARDAI_JIRA_EMAIL`). With a token, status/comment/label updates are sent by ardai itself, without agent tokens. |
-| `source.tokenFile` | `""` | Git-ignored file with the Atlassian API token (env `ARDAI_JIRA_TOKEN`); never shown to agents. |
+| `source.tokenFile` | `""` | Git-ignored file (relative, absolute or `~/…`) with the Atlassian API token (env `ARDAI_JIRA_TOKEN`); never shown to agents. |
 | `source.inProgressStatus` | `"In Progress"` | Status set when work starts (REST only). |
 | `source.reviewStatus` | `"In Review"` | Status set after a successful merge, with a comment (REST only). |
 | `source.todoStatus` | `"To Do"` | Status set by clean (REST). |

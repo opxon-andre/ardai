@@ -45,10 +45,7 @@ einen Fehler gemeldet (zum Beispiel Push abgelehnt), behebe ihn zuerst; nur dann
   darfst du dort zum Hochfahren des lokalen Stacks lesen (Details im Auftrag).
 - Docker-Stack starten/neu bauen ist erlaubt, wenn der Auftrag es braucht.
   Beim Einzel-Deploy `--no-deps` verwenden.
-- Jira: beim Start Ticket auf „In Progress“, bei Erfüllung aller
-  Akzeptanzkriterien auf „In Review“ plus kurzer Kommentar mit Ergebnis und
-  Branch. Nicht erfüllbares Kriterium: Kommentar + Label `AC:Issue`
-  (beachte gegebenenfalls die Jira-Richtlinien des Projekts).
+- Jira: {{jira}}
 
 ## 4. Code erkunden: zuerst code-review-graph
 
@@ -114,7 +111,7 @@ Schritt erneut gelesen. Deshalb:
   nie komplette Logs, Diffs oder Dateien ausgeben. Große Dateien nur bereichsweise lesen (Read mit Zeilenbereich,
   `sed -n 'a,bp'`), Dateien nicht mehrfach lesen.
 - Tests gezielt: erst die betroffenen Testdateien, die komplette Suite einmal am Ende.
-- Jira nur am Anfang (In Progress) und am Ende (In Review mit kurzem Kommentar); Abfragen wie
-  getAccessibleAtlassianResources entfallen, wenn die cloudId im Auftrag steht.
+- Jira: nur wie in Abschnitt 3 beschrieben; Abfragen wie getAccessibleAtlassianResources entfallen, wenn die
+  cloudId im Auftrag steht.
 - Suche im Code zuerst mit gezieltem `grep`/Glob; bei strukturellen Fragen (Aufrufer, Auswirkungen) die
   Graph-Werkzeuge (Abschnitt 4), statt viele Dateien zu lesen.

@@ -103,3 +103,24 @@ test('CLI: step and handoff run from the worktree without a project configuratio
   assert.match(shown.stdout, /\[claude\] DONE\s+CLI Test/);
   assert.equal(spawnSync('node', [cli, 'step', 'DONE'], { cwd: f.work, encoding: 'utf8' }).status, 1, 'text is required');
 });
+
+test('checkpoint stores the working state under refs/ardai/wip without touching branch or index', async () => {
+  const { Git } = await import('../lib/git.mjs');
+  const { work, remote } = fixture();
+  fs.writeFileSync(path.join(work, 'new.txt'), 'neu');
+  fs.writeFileSync(path.join(work, 'a.txt'), 'geändert');
+  git(work, 'add', 'a.txt'); // staged change of the agent must stay staged
+  const head = git(work, 'rev-parse', 'HEAD');
+  const g = new Git(work, { remote: 'origin', worktreeRoot: '..' });
+  const commit = g.checkpoint(work, 'T-1');
+  assert.ok(commit);
+  assert.equal(git(work, 'rev-parse', 'HEAD'), head);
+  assert.equal(git(work, 'rev-parse', 'refs/ardai/wip/T-1'), commit);
+  assert.equal(git(work, 'show', `${commit}:new.txt`), 'neu');
+  assert.equal(git(work, 'rev-parse', `${commit}^`), head);
+  assert.equal(git(work, 'status', '--porcelain'), 'M  a.txt\n?? new.txt');
+  assert.equal(git(remote, 'rev-parse', 'refs/ardai/wip/T-1'), commit);
+  assert.equal(g.checkpoint(work, 'T-1'), null); // unchanged → no new commit
+  fs.writeFileSync(path.join(work, 'new.txt'), 'neuer');
+  assert.notEqual(g.checkpoint(work, 'T-1'), commit);
+});

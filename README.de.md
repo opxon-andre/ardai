@@ -277,6 +277,12 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `baseBranch` | `"main"` | Ausgangsbranch zum Anlegen von integration. |
 | `remote` | `"origin"` | Git-Remote für Fetch/Push. |
 | `tickSeconds` | `30` | Scheduler-Intervall in Sekunden. |
+| `checkpointMinutes` | `10` | Minuten zwischen automatischen Sicherungen laufender Aufgaben unter `refs/ardai/wip/<Aufgabe>` (temporärer Index, Agent-Branch bleibt unberührt); 0 schaltet ab. |
+| `ollama` | object (see child fields) | Optionales lokales Modell, das den Review-Kommentar umformuliert; Default aus. |
+| `ollama.enabled` | `false` | Ollama für Kommentar-Entwürfe nutzen; bei jedem Fehler gilt der Vorlagentext. |
+| `ollama.url` | `"http://localhost:11434"` | Adresse des Ollama-Servers. |
+| `ollama.model` | `"qwen2.5:1.5b"` | Modellname; kleine Modelle passen zu reinen CPU-Rechnern. |
+| `ollama.timeoutSeconds` | `60` | Timeout je Anfrage; danach gilt der Vorlagentext. |
 | `autoStartRunner` | `false` | retry/answer dürfen einen Hintergrundlauf für den gesamten State starten; --start erlaubt es pro Aufruf. |
 | `maxRunMinutes` | `120` | Agenten-Laufzeitlimit in Minuten; Timeout unterbricht die Aufgabe. |
 | `maxAttempts` | `3` | Fehlversuchsgrenze vor failed und blockierender Frage; Kontingent-Outages zählen nicht. |
@@ -326,7 +332,7 @@ Optionale Laufzeit-/Loader-Einstellungen außerhalb der rohen Default-Config:
 | `protocolAddendum` | `"ardai.protocol.md"` | Ohne expliziten Wert: Branding-Datei, dann legacyNames.protocolFiles; ein expliziter fehlender Pfad lädt keinen Zusatz. |
 | `source.stoppedLabel` | `"ardai:stopped"` | Stopp-Label; zusätzlich werden brand.legacyNames.stoppedLabels erkannt und bei Resume/Clean entfernt. |
 | `source.jiraEmail` | `""` | Atlassian-Konto-E-Mail für direkten REST-Zugriff (Env `ARDAI_JIRA_EMAIL`). Mit Token sendet ardai Status-, Kommentar- und Label-Änderungen selbst, ohne Agent-Tokens. |
-| `source.tokenFile` | `""` | Gitignorierte Datei mit dem Atlassian-API-Token (Env `ARDAI_JIRA_TOKEN`); Agenten sehen ihn nie. |
+| `source.tokenFile` | `""` | Gitignorierte Datei (relativ, absolut oder mit `~/`) mit dem Atlassian-API-Token (Env `ARDAI_JIRA_TOKEN`); Agenten sehen ihn nie. |
 | `source.inProgressStatus` | `"In Progress"` | Status beim Start der Arbeit (nur REST). |
 | `source.reviewStatus` | `"In Review"` | Status nach erfolgreichem Merge, mit Kommentar (nur REST). |
 | `source.todoStatus` | `"To Do"` | Status bei clean (REST). |

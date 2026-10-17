@@ -72,3 +72,13 @@ test('fixture addendum is appended once after the core protocol in both prompts'
     assert.match(prompt, /docs\/api\//);
   }
 });
+
+test('jira duty in the protocol is a placeholder filled by the prompt', () => {
+  const base = { task: { id: 'TASK-1', domain: [] }, agent: 'codex', otherTasks: [] };
+  const own = taskPrompt(base);
+  const managed = taskPrompt({ ...base, jiraManaged: true });
+  assert.ok(!own.includes('{{jira}}') && !managed.includes('{{jira}}'));
+  assert.match(own, /„In Progress“/);
+  assert.match(managed, /setzt ardai selbst – du änderst das Ticket nicht/);
+  assert.ok(!managed.includes('AC:Issue'));
+});

@@ -54,3 +54,12 @@ test('adf splits paragraphs and loadJiraAuth needs email and token', () => {
   assert.equal(loadJiraAuth({ config: { jiraBaseUrl: 'https://x', source: {} }, env: {} }), null);
   assert.ok(loadJiraAuth({ config: { jiraBaseUrl: 'https://x/', source: { jiraEmail: 'e' } }, env: { ARDAI_JIRA_TOKEN: 't' } }));
 });
+
+test('tokenFile resolves "~" to the home directory and everything else against the repo', async () => {
+  const { resolveTokenFile } = await import('../lib/jira.mjs');
+  const path = await import('node:path');
+  assert.equal(resolveTokenFile('~/secrets/jira', '/repo', '/home/u'), path.join('/home/u', '/secrets/jira'));
+  assert.equal(resolveTokenFile('~\\jira', '/repo', '/home/u'), path.join('/home/u', '\\jira'));
+  assert.equal(resolveTokenFile('secrets/jira', '/repo', '/home/u'), path.resolve('/repo', 'secrets/jira'));
+  assert.equal(resolveTokenFile('~other/jira', '/repo', '/home/u'), path.resolve('/repo', '~other/jira'));
+});

@@ -24,9 +24,16 @@
   "baseBranch": "main",
   "remote": "origin",
   "tickSeconds": 30,
+  "checkpointMinutes": 10,
+  "ollama": {
+    "enabled": true,
+    "url": "http://localhost:11434",
+    "model": "qwen2.5:1.5b",
+    "timeoutSeconds": 60
+  },
   "autoStartRunner": false,
   "maxRunMinutes": 120,
-  "maxAttempts": 3,
+  "maxAttempts": 2,
   "fallbackBackoffMinutes": 30,
   "quotaThresholdPercent": 97,
   "reimportMinutes": 30,

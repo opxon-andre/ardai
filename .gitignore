@@ -35,3 +35,5 @@ results/
 
 # Leftovers of interrupted reliability tests
 test/.reliability-*/
+
+todo/

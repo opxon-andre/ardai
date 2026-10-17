@@ -121,6 +121,8 @@ im Repo-Root enthält die bisherigen Projekteinstellungen.
 | `schemaVersion` | Aktuelle Version `2`; fehlt das Feld, gilt Version `1` |
 | `language`, `ui.enabled`, `ui.port` | Sprache (`de`/`en`), automatische Web-Oberfläche, Port |
 | `jiraBaseUrl`, `source` | Jira-URL, Quelltyp, Cloud-ID, Stop-Label und To-Do-Status |
+| `checkpointMinutes` | Default `10`: ardai sichert den Stand laufender Aufgaben alle n Minuten unter `refs/ardai/wip/<Aufgabe>` (temporärer Index, Branch und Index des Agenten bleiben unberührt) und pusht den Ref; `0` schaltet das ab |
+| `ollama` | Optional, Default aus: `enabled`, `url` (`http://localhost:11434`), `model`, `timeoutSeconds`. Formuliert den Review-Kommentar im Ticket lokal um; bei Fehler, Timeout oder fehlenden Branch-/Testangaben gilt immer der Vorlagentext `jira.comment.*` |
 | `remote`, `baseBranch`, `integrationBranch` | Git-Remote und Zielbranches |
 | `tickSeconds`, `reimportMinutes` | Scheduler-Intervall und erneuter Aufgabenimport |
 | `autoStartRunner` | Boolean, Default `false`: `retry`/`answer` starten ohne laufenden Runner nur bei `true` einen Hintergrund-Runner für den gesamten State. `--start` erlaubt den Start pro Aufruf. `run`/`work` sind selbst ausdrückliche Startbefehle |

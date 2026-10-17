@@ -11,6 +11,7 @@ import { taskPrompt, resumePrompt, importPrompt } from './lib/prompts.mjs';
 import { spawn } from 'node:child_process';
 import { renderReport, buildReportHtml } from './lib/report.mjs';
 import { runSourceAction, killTree, isAlive } from './lib/sources.mjs';
+import { createPolisher } from './lib/ollama.mjs';
 import { JiraClient, loadJiraAuth, applyAction, REST_ACTIONS } from './lib/jira.mjs';
 import { startServer } from './lib/server.mjs';
 import { makeT } from './lib/i18n.mjs';
@@ -735,6 +736,9 @@ function jiraRest() {
   return jiraClientCache;
 }
 
+let polisherCache;
+const polisher = () => (polisherCache === undefined ? (polisherCache = createPolisher(config.ollama)) : polisherCache);
+
 const REST_ONLY = new Set(['started', 'review', 'failed']);
 
 function queueSourceAction(task, type, extra = {}) {
@@ -769,7 +773,7 @@ async function processSourceActions() {
     let r;
     if (rest && REST_ACTIONS.has(type)) {
       try {
-        await applyAction(rest, next, { src: config.source, t: (k, v) => t(k, v) });
+        await applyAction(rest, next, { src: config.source, t: (k, v) => t(k, v), polish: polisher() });
         r = { ok: true };
       } catch (err) {
         r = { ok: false, error: err.message };
@@ -975,6 +979,7 @@ async function cmdRun(args, { source = null } = {}) {
       for (const task of state.tasks) if (task.status === 'blocked' && depsDone(task)) task.status = 'ready';
       ensurePhaseTests();
       refreshArchive();
+      checkpointRunning();
       for (const agent of Object.keys(config.agents)) {
         if (activeRuns.has(agent) || !isAvailable(agent)) continue;
         const task = selectTask(agent);
@@ -1008,6 +1013,23 @@ async function cmdRun(args, { source = null } = {}) {
       const timer = setTimeout(resolve, config.tickSeconds * 1000);
       wake = () => { clearTimeout(timer); resolve(); };
     });
+  }
+}
+
+// Sichert den Stand laufender Aufgaben unter refs/ardai/wip/<Aufgabe>; Fehler dürfen den Takt nie stören.
+const lastCheckpoint = new Map();
+function checkpointRunning() {
+  const minutes = Number(config.checkpointMinutes);
+  if (!(minutes > 0)) return;
+  for (const task of running()) {
+    if (Date.now() - (lastCheckpoint.get(task.id) || 0) < minutes * 60_000) continue;
+    lastCheckpoint.set(task.id, Date.now());
+    try {
+      const commit = git.checkpoint(git.worktreePath(task.assignedAgent), task.id);
+      if (commit) log(`${task.id}: Checkpoint ${commit.slice(0, 8)} unter refs/ardai/wip/${task.id}`);
+    } catch (err) {
+      log(`${task.id}: Checkpoint fehlgeschlagen (${err.message.split('\n')[0]})`);
+    }
   }
 }
 
