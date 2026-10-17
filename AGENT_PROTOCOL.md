@@ -6,31 +6,33 @@ Kontingent kann jederzeit mitten in der Arbeit enden – dann übernimmt der and
 Agent deine Aufgabe ab dem letzten gepushten Stand. Halte dich deshalb genau an
 diese Regeln.
 
-## 1. Handoff-Datei (Pflicht, kleinteilig)
+## 1. Handoff und Sicherung: ein Aufruf pro Teilziel
 
-Datei: `.handoff/<TASK-ID>.md` im Task-Branch. Lies sie **zuerst**, bevor du
-irgendetwas änderst. Steht dort ein `START` ohne zugehöriges `DONE`, wurde
-dieser Schritt durch einen Outage unterbrochen: prüfe den tatsächlichen Stand im
-Code, bevor du ihn wiederholst oder fortsetzt.
+Datei: `.handoff/<TASK-ID>.md` im Task-Branch. **Lies sie zuerst, aber nur so:**
+`{{cli}} handoff` (zeigt den Plan, die letzten Einträge und offene `START`-Einträge; mit `--all` die ganze
+Datei, nur wenn nötig). Ein `START` ohne zugehöriges `DONE` wurde durch einen Outage unterbrochen: prüfe den
+tatsächlichen Stand im Code, bevor du ihn wiederholst.
 
-Format, eine Zeile pro Ereignis, nur anhängen, nie umschreiben:
+Arbeite in **Teilzielen** (3 bis 6 je Aufgabe, jeweils ein sinnvoll abgeschlossener Block: Funktion samt Test,
+nicht jede Datei einzeln). Lege vor dem ersten Teilziel einmalig den Abschnitt `## Plan` in der Handoff-Datei an
+(Datei bearbeiten, ein paar Zeilen). Danach nur noch diese Aufrufe:
 
 ```
-- 2026-10-14T10:15Z [claude] START  Schritt 3: Funktion der zugewiesenen Komponente implementieren
-- 2026-10-14T10:32Z [claude] DONE   Schritt 3: Funktion implementiert, Unit-Test grün (commit a1b2c3d)
-- 2026-10-14T10:33Z [claude] NOTE   Offene Frage Q zur Paginierung, arbeite mit Default 50 weiter
+{{cli}} step START "Teilziel 2: Validierung der Eingaben"   # optional, nur bei längeren Teilzielen
+{{cli}} step DONE  "Validierung implementiert, Tests grün"    # Zeile anhängen + git add -A + commit + push, ein Aufruf
+{{cli}} step NOTE  "Annahme: Default-Seitengröße 50"          # nur Eintrag, kein Commit
 ```
 
-Ein Schritt ist klein: eine Datei, eine Funktion, ein Test – maximal etwa
-15 Minuten Arbeit. Lege zu Beginn einen Abschnitt `## Plan` mit den geplanten
-Schritten an, falls er noch fehlt.
+`step DONE` ersetzt Handoff-Bearbeitung, `git add`, `git commit` und `git push`. Die Commit-Nachricht lautet
+`<TASK-ID>: <Text>`. Gib dem DONE-Text das Ergebnis mit (was ist fertig, welche Tests liefen). Die Datei wird
+vom Werkzeug bei Bedarf verdichtet, bearbeite sie außer beim Plan nicht von Hand.
 
-## 2. Commit und Push nach jedem Schritt
+## 2. Push und Grenzen der Sicherung
 
-Nach jedem `DONE`: `git add -A`, `git commit` (Nachricht beginnt mit der
-Task-ID), `git push -u origin <Task-Branch>`. Spätestens nach jedem Subtask
-muss alles gepusht sein. **Niemals nach `main` pushen** (ein Hook blockiert
-das zusätzlich). Kein Force-Push, kein Rebase gepushter Commits.
+Spätestens nach jedem Teilziel muss alles gepusht sein: das erledigt `step DONE`. **Niemals nach `main`
+pushen** (ein Hook blockiert das zusätzlich). Kein Force-Push, kein Rebase gepushter Commits. Hat `step`
+einen Fehler gemeldet (zum Beispiel Push abgelehnt), behebe ihn zuerst; nur dann sind eigene
+`git`-Befehle nötig.
 
 ## 3. Grenzen
 
@@ -102,3 +104,17 @@ in `.gitignore`). Format:
 
 `status: "done"` nur, wenn alle direkt prüfbaren Kriterien `pass` sind. Sonst
 `failed` mit Hinweis im jeweiligen Test-Eintrag.
+
+## 8. Kontext sparen (spart Kontingent für alle)
+
+Jeder Werkzeugaufruf und jede Ausgabe bleibt für den Rest des Laufs im Kontext und wird bei jedem weiteren
+Schritt erneut gelesen. Deshalb:
+
+- Ausgaben begrenzen: Tests mit knapper Ausgabe starten und filtern (`| tail -n 40`, `grep -E "fail|error"`),
+  nie komplette Logs, Diffs oder Dateien ausgeben. Große Dateien nur bereichsweise lesen (Read mit Zeilenbereich,
+  `sed -n 'a,bp'`), Dateien nicht mehrfach lesen.
+- Tests gezielt: erst die betroffenen Testdateien, die komplette Suite einmal am Ende.
+- Jira nur am Anfang (In Progress) und am Ende (In Review mit kurzem Kommentar); Abfragen wie
+  getAccessibleAtlassianResources entfallen, wenn die cloudId im Auftrag steht.
+- Suche im Code zuerst mit gezieltem `grep`/Glob; bei strukturellen Fragen (Aufrufer, Auswirkungen) die
+  Graph-Werkzeuge (Abschnitt 4), statt viele Dateien zu lesen.

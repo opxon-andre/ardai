@@ -291,7 +291,9 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `agents.claude.kind` | `"claude"` | CLI adapter (claude or codex). |
 | `agents.claude.enabled` | `true` | Eligible for scheduling/import recommendations. |
 | `agents.claude.command` | `"claude"` | CLI executable; environment placeholders are expanded. Codex may prefer the desktop app executable on Windows. |
-| `agents.claude.args` | `["-p","--output-format","stream-json","--verbose","--dangerously-skip-permissions","--disallowedTools","mcp__atlassian"]` | Base CLI argument array, passed verbatim; inspect permission-bypass flags before use. |
+| `agents.claude.args` | `["-p","--output-format","stream-json","--verbose","--dangerously-skip-permissions","--disallowedTools","mcp__atlassian","--disable-slash-commands","--exclude-dynamic-system-prompt-sections","--tools","Bash,Read,Edit,Write,Grep,Glob,ToolSearch"]` | Base CLI argument array, passed verbatim; inspect permission-bypass flags before use. |
+| `agents.claude.env` | `{"ENABLE_TOOL_SEARCH":"true"}` | Extra environment variables for the agent process. |
+| `agents.claude.env.ENABLE_TOOL_SEARCH` | `"true"` | Extra environment variables for the agent process. `ENABLE_TOOL_SEARCH=true` loads MCP tool definitions on demand (via ToolSearch) instead of putting all of them into every turn. |
 | `agents.claude.preferredDomains` | `[]` | Preferred path prefixes; scheduling preference, not an access boundary. |
 | `agents.claude.bySize` | object (see child fields) | Task-size overrides (S/M/L); matching args are appended to base args. |
 | `agents.claude.bySize.S` | object (see child fields) | Override for small tasks. |
@@ -426,6 +428,10 @@ npm test
 Alternatively run npm test in this directory. The suite needs Node 24+ and Git, uses isolated local
 fixtures and no network, Jira, real agents or running stack. The documentation test checks every
 default-config field and leaf value in both READMEs, and the diagram/state contract.
+
+## Saving tokens
+
+Every tool call and every output stays in the agent's context and is re-read on each following turn, so the size of the base context and the number of turns dominate the consumption. Measured on 82 runs: the default Claude Code base context is about 34,000 tokens per turn. The defaults of this tool reduce it to roughly 10,000: `--tools` restricts the built-in tools to the six needed for coding, `ENABLE_TOOL_SEARCH=true` defers MCP tool definitions, and `--disable-slash-commands` drops the skill list. The commands `ardai step` and `ardai handoff` (see the agent protocol) replace three tool calls per work step by one and keep the handoff file short.
 
 ## Status / Contributing
 

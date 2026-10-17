@@ -43,6 +43,11 @@ if (cmd === 'install-cli') {
   catch (err) { if (!err.message.startsWith('No ')) throw err; }
   cmdInstallCli(args, brand); process.exit(0);
 }
+// step/handoff are used by the agents inside their worktree: no project config, no state, minimal output.
+if (cmd === 'step' || cmd === 'handoff') {
+  const { run } = await import('./lib/handoff.mjs');
+  process.exit(run(cmd, args));
+}
 let project;
 try { project = loadProject({ init: cmd === 'init' }); }
 catch (err) { console.error(err.message); process.exit(1); }
@@ -202,8 +207,8 @@ function startTask(agent, task) {
     : [];
   const secretsProvided = isPhaseTest && provideLocalSecrets(wt);
   const prompt = resume
-    ? resumePrompt(task, protocolAddendum(repoRoot, brand, config.protocolAddendum))
-    : taskPrompt({ task, agent, otherTasks: running(), takeover, answers, contextDocs: config.contextDocs || [], priorResults, secretsProvided, localSecrets: config.phaseTestLocalSecrets, composeProject: config.phaseTestComposeProject, protocolAddendum: protocolAddendum(repoRoot, brand, config.protocolAddendum) });
+    ? resumePrompt(task, protocolAddendum(repoRoot, brand, config.protocolAddendum), brand.cli)
+    : taskPrompt({ task, agent, otherTasks: running(), takeover, answers, contextDocs: config.contextDocs || [], cli: brand.cli, jiraCloudId: config.source?.cloudId || '', priorResults, secretsProvided, localSecrets: config.phaseTestLocalSecrets, composeProject: config.phaseTestComposeProject, protocolAddendum: protocolAddendum(repoRoot, brand, config.protocolAddendum) });
 
   // Kleine Aufgaben laufen mit einem schnelleren Modell bzw. weniger Reasoning (config: agents.<name>.bySize)
   const sizeArgs = config.agents[agent].bySize?.[task.size]?.args || [];
@@ -1201,6 +1206,8 @@ function printHelp(brand = DEFAULT_BRAND) {
     `  ${brand.cli} log [TASK|AGENT] [-f] [-n N]  Verlauf der Agenten wie im Chat (-f: live folgen)`,
     `  ${brand.cli} answer <Q-ID> "<Text>"      Frage beantworten / Hinweis widersprechen`,
     `  ${brand.cli} answer <Q-ID> "<Text>" [--domain +pfad] [--start]`,
+    `  ${brand.cli} step START|DONE|NOTE "<Text>"  (für Agenten im Worktree) Handoff-Eintrag; DONE committet und pusht`,
+    `  ${brand.cli} handoff [--all] [--last N]    (für Agenten) Plan und letzte Handoff-Einträge`,
     `  ${brand.cli} patch <TASK> --epic E --domain +pfad/-pfad --note "Text" --agent claude|codex --depends +ID/-ID --size S|M|L`,
     `  ${brand.cli} ack <Q-ID>                  Hinweis bestätigen (Annahme passt)`,
     `  ${brand.cli} hints [--all]               gesammelte Hinweise der Agenten (auch archivierter Aufgaben)`,

@@ -294,7 +294,9 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `agents.claude.kind` | `"claude"` | CLI-Adapter (claude oder codex). |
 | `agents.claude.enabled` | `true` | Für Scheduler und Import-Empfehlungen aktiviert. |
 | `agents.claude.command` | `"claude"` | CLI-Programm; Umgebungsplatzhalter werden expandiert. Codex bevorzugt unter Windows gegebenenfalls das Desktop-App-Programm. |
-| `agents.claude.args` | `["-p","--output-format","stream-json","--verbose","--dangerously-skip-permissions","--disallowedTools","mcp__atlassian"]` | Basis-CLI-Argumente, unverändert übergeben; Flags zur Umgehung von Berechtigungsabfragen vor Nutzung prüfen. |
+| `agents.claude.args` | `["-p","--output-format","stream-json","--verbose","--dangerously-skip-permissions","--disallowedTools","mcp__atlassian","--disable-slash-commands","--exclude-dynamic-system-prompt-sections","--tools","Bash,Read,Edit,Write,Grep,Glob,ToolSearch"]` | Basis-CLI-Argumente, unverändert übergeben; Flags zur Umgehung von Berechtigungsabfragen vor Nutzung prüfen. |
+| `agents.claude.env` | `{"ENABLE_TOOL_SEARCH":"true"}` | Zusätzliche Umgebungsvariablen für den Agentenprozess. |
+| `agents.claude.env.ENABLE_TOOL_SEARCH` | `"true"` | Zusätzliche Umgebungsvariablen für den Agentenprozess. `ENABLE_TOOL_SEARCH=true` lädt MCP-Werkzeugdefinitionen bei Bedarf (über ToolSearch), statt sie in jeden Turn zu legen. |
 | `agents.claude.preferredDomains` | `[]` | Bevorzugte Pfadpräfixe; Scheduler-Präferenz, keine Zugriffsgrenze. |
 | `agents.claude.bySize` | Objekt (siehe Unterfelder) | Überschreibungen nach Aufgabengröße (S/M/L); passende args ergänzen die Basisargumente. |
 | `agents.claude.bySize.S` | Objekt (siehe Unterfelder) | Überschreibung für kleine Aufgaben. |
@@ -429,6 +431,10 @@ npm test
 Alternativ npm test im Tool-Verzeichnis ausführen. Die Suite benötigt Node 24+ und Git und verwendet
 isolierte lokale Fixtures ohne Netz, Jira, echte Agenten oder laufenden Stack.
 Der Dokumentationstest prüft jedes Default-Feld samt Blattwert in beiden READMEs und die Diagramm-/Zustandsregeln.
+
+## Tokens sparen
+
+Jeder Werkzeugaufruf und jede Ausgabe bleibt im Kontext des Agenten und wird in jedem weiteren Turn erneut gelesen. Deshalb bestimmen die Größe des Basiskontexts und die Zahl der Turns den Verbrauch. Gemessen an 82 Läufen: Der Standard-Basiskontext von Claude Code liegt bei etwa 34.000 Tokens pro Turn. Die Standardwerte dieses Tools senken ihn auf rund 10.000: `--tools` beschränkt die eingebauten Werkzeuge auf die sechs fürs Programmieren nötigen, `ENABLE_TOOL_SEARCH=true` lädt MCP-Werkzeugdefinitionen bei Bedarf, `--disable-slash-commands` entfernt die Skill-Liste. Die Befehle `ardai step` und `ardai handoff` (siehe Agentenprotokoll) ersetzen drei Werkzeugaufrufe je Arbeitsschritt durch einen und halten die Handoff-Datei kurz.
 
 ## Status / Contributing
 
