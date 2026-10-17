@@ -82,3 +82,13 @@ test('jira duty in the protocol is a placeholder filled by the prompt', () => {
   assert.match(managed, /setzt ardai selbst – du änderst das Ticket nicht/);
   assert.ok(!managed.includes('AC:Issue'));
 });
+
+test('web server accepts a caller-supplied stable token', async () => {
+  const { startServer } = await import('../lib/server.mjs');
+  const ui = await startServer({ port: 47311, t: (k) => k, page: () => 'ok', fragment: () => 'ok', onAction: () => 'ok', token: 'stable-token-0123456789' });
+  try {
+    assert.equal(ui.token, 'stable-token-0123456789');
+    assert.equal((await fetch(ui.url)).status, 200);
+    assert.equal((await fetch(ui.url.replace('stable', 'wrong'))).status, 403);
+  } finally { ui.server.close(); }
+});

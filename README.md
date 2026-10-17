@@ -275,14 +275,14 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `remote` | `"origin"` | Git remote for fetch/push. |
 | `tickSeconds` | `30` | Scheduler polling interval in seconds. |
 | `checkpointMinutes` | `10` | Minutes between automatic snapshots of running tasks under `refs/ardai/wip/<task>` (temporary index, agent branch untouched); 0 disables. |
-| `ollama` | object (see child fields) | Optional local model that rewrites the review comment; off by default. |
-| `ollama.enabled` | `false` | Use Ollama for review-comment drafts; any failure falls back to the template text. |
+| `ollama` | object (see child fields) | Optional local model that rewrites the review comment; enabled by default, without a reachable Ollama the template text is used. |
+| `ollama.enabled` | `true` | Use Ollama for review-comment drafts; any failure falls back to the template text. |
 | `ollama.url` | `"http://localhost:11434"` | Ollama server address. |
 | `ollama.model` | `"qwen2.5:1.5b"` | Model name; small models suit CPU-only machines. |
 | `ollama.timeoutSeconds` | `60` | Timeout per request; on expiry the template text is used. |
 | `autoStartRunner` | `false` | Allow retry/answer to start a background run for the entire state; --start overrides per call. |
 | `maxRunMinutes` | `120` | Agent run timeout in minutes; timeout interrupts task. |
-| `maxAttempts` | `3` | Failed-attempt limit before failed and a blocking question; quota outages do not count. |
+| `maxAttempts` | `2` | Failed-attempt limit before failed and a blocking question; quota outages do not count. |
 | `fallbackBackoffMinutes` | `30` | Minutes to block an exhausted agent when no reset time is known. |
 | `quotaThresholdPercent` | `97` | Preflight quota-utilization threshold in percent. |
 | `reimportMinutes` | `30` | Jira import cache and work --jql refresh interval in minutes; --reimport forces refresh. |
@@ -390,7 +390,7 @@ For detailed migration/path behavior see [CONFIGURATION.md](CONFIGURATION.md).
 `status` prints tasks, quotas and questions. `log [TASK|AGENT] -f [-n N]` follows activity.
 `report` writes a timestamped HTML snapshot to resultsDir; the live report is runtimeDir/report.html.
 `serve [--no-open]` starts the local UI; run/work start it automatically when enabled.
-The terminal prints its token-bearing URL. Protect that URL and logs.
+The terminal prints its token-bearing URL. The token is stored in `<runtimeDir>/ui-token` and stays the same across restarts (bookmarks keep working; delete the file for a new one). After the last job ardai keeps running while the UI is active, so the status page stays reachable; Ctrl+C ends it. Protect that URL and logs.
 
 `stop <ID>` kills the process tree, attempts autosave/push and leaves stopped work awaiting retry;
 `stop` stops all agents and the runner. `clean <ID>` deletes local/remote task branches and
@@ -411,7 +411,7 @@ Ticket updates use short agent MCP calls; unavailable agents delay them.
 - Agents run with permission/sandbox bypass flags by default. Domain restrictions and secret bans
   are protocol rules, not an operating-system sandbox. Use only trusted projects, configuration,
   task inputs and protocol addenda; inspect executable commands and argument arrays.
-- The web server binds 127.0.0.1, validates Host and requires a random per-start token on every request.
+- The web server binds 127.0.0.1, validates Host and requires a random token (created once, stored in `<runtimeDir>/ui-token`) on every request.
   Keep it local and do not publish the token URL.
 
 ## Limits

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Orchestrator für Claude + Codex. Läuft ohne KI und damit unabhängig vom
 // Kontingent der Agenten. Bedienung: siehe README.md in diesem Ordner.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -742,7 +743,7 @@ const polisher = () => (polisherCache === undefined ? (polisherCache = createPol
 const REST_ONLY = new Set(['started', 'review', 'failed']);
 
 function queueSourceAction(task, type, extra = {}) {
-  if (!config.source || task.jira === false || task.type === 'phase-test') return;
+  if (!config.source || task.jira === false || task.type === 'phase-test' || !KEY_RE.test(task.id)) return; // lokale IDs gibt es in Jira nicht
   if (REST_ONLY.has(type) && !jiraRest()) return; // ohne REST-Zugang übernehmen die Agenten das Ticket selbst
   const q = (state.sourceActions ||= []);
   const pendingStop = q.findIndex((a) => a.taskId === task.id && a.type === 'stopped' && !a.sending);
@@ -907,6 +908,16 @@ async function cmdImport(args) {
 // run: arbeitet alles im State ab und läuft dauerhaft (oder bis leer mit --exit-when-idle).
 // work: importiert die angegebenen Tickets und arbeitet NUR diese ab, bis alle
 // fertig sind – über Outages hinweg und inklusive Warten auf deine Antworten.
+// Läuft die Web-Oberfläche, bleibt ardai nach dem letzten Auftrag aktiv und zeigt weiter die Statusseite.
+let uiHandle = null;
+let idleAnnounced = false;
+function finishOrStayIdle(message) {
+  if (!uiHandle) { log(message); process.exit(0); }
+  if (idleAnnounced) return;
+  idleAnnounced = true;
+  log(`${message} Statusseite bleibt erreichbar (Strg+C beendet ${brand.name}).`);
+}
+
 async function cmdRun(args, { source = null } = {}) {
   const other = runnerAlive();
   if (other) { console.error(`Orchestrator läuft bereits (PID ${other}).`); process.exit(1); }
@@ -932,7 +943,7 @@ async function cmdRun(args, { source = null } = {}) {
   for (const [name, cfg] of Object.entries(config.agents)) if (cfg.enabled) git.ensureWorktree(name);
   save();
 
-  if (!args.includes('--no-ui') && config.ui?.enabled !== false) await startUi({ open: args.includes('--open') });
+  if (!args.includes('--no-ui') && config.ui?.enabled !== false) uiHandle = await startUi({ open: args.includes('--open') });
 
   // Import für work: bei Outage aller Agenten warten statt abbrechen.
   let lastImport = 0;
@@ -989,11 +1000,11 @@ async function cmdRun(args, { source = null } = {}) {
     save();
 
     const mine = state.tasks.filter(inScope);
-    if (source && !shutdownRequested && activeRuns.size === 0 && mine.every((x) => [DONE, 'stopped'].includes(x.status))) {
+    if (activeRuns.size) idleAnnounced = false;
+    if (source && !shutdownRequested && activeRuns.size === 0 && !idleAnnounced && mine.every((x) => [DONE, 'stopped'].includes(x.status))) {
       await flushSourceActions();
-      log(`Auftrag beendet: ${mine.filter((x) => x.status === DONE).length} fertig und in ${config.integrationBranch}, ${mine.filter((x) => x.status === 'stopped').length} gestoppt.`);
       writeResultsSnapshot();
-      process.exit(0);
+      finishOrStayIdle(`Auftrag beendet: ${mine.filter((x) => x.status === DONE).length} fertig und in ${config.integrationBranch}, ${mine.filter((x) => x.status === 'stopped').length} gestoppt.`);
     }
     if (exitWhenIdle && activeRuns.size === 0 && !mine.some((x) => RUNNABLE.has(x.status))) {
       await flushSourceActions();
@@ -1056,9 +1067,23 @@ function uiHtml(token, fragmentOnly) {
   return buildReportHtml(state, { ...reportData(), activity: liveActivity(), ui: { t, token, runnerAlive: isRunner || Boolean(runnerAlive()) }, fragmentOnly });
 }
 
+// Stable address: the token is created once and kept in the runtime directory, so bookmarks survive restarts.
+function uiToken() {
+  const file = path.join(runtimeDir, 'ui-token');
+  try {
+    const stored = fs.readFileSync(file, 'utf8').trim();
+    if (/^[A-Za-z0-9_-]{20,}$/.test(stored)) return stored;
+  } catch { /* first start */ }
+  const fresh = crypto.randomBytes(18).toString('base64url');
+  try { fs.mkdirSync(runtimeDir, { recursive: true }); fs.writeFileSync(file, `${fresh}
+`, { mode: 0o600 }); } catch { /* per-start token */ }
+  return fresh;
+}
+
 async function startUi({ open = false } = {}) {
   const ui = await startServer({
     port: config.ui?.port || 4711,
+    token: uiToken(),
     t,
     log,
     page: (token) => uiHtml(token, false),

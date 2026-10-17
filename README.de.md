@@ -278,14 +278,14 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `remote` | `"origin"` | Git-Remote für Fetch/Push. |
 | `tickSeconds` | `30` | Scheduler-Intervall in Sekunden. |
 | `checkpointMinutes` | `10` | Minuten zwischen automatischen Sicherungen laufender Aufgaben unter `refs/ardai/wip/<Aufgabe>` (temporärer Index, Agent-Branch bleibt unberührt); 0 schaltet ab. |
-| `ollama` | object (see child fields) | Optionales lokales Modell, das den Review-Kommentar umformuliert; Default aus. |
-| `ollama.enabled` | `false` | Ollama für Kommentar-Entwürfe nutzen; bei jedem Fehler gilt der Vorlagentext. |
+| `ollama` | object (see child fields) | Optionales lokales Modell, das den Review-Kommentar umformuliert; Default an, ohne erreichbaren Ollama gilt der Vorlagentext. |
+| `ollama.enabled` | `true` | Ollama für Kommentar-Entwürfe nutzen; bei jedem Fehler gilt der Vorlagentext. |
 | `ollama.url` | `"http://localhost:11434"` | Adresse des Ollama-Servers. |
 | `ollama.model` | `"qwen2.5:1.5b"` | Modellname; kleine Modelle passen zu reinen CPU-Rechnern. |
 | `ollama.timeoutSeconds` | `60` | Timeout je Anfrage; danach gilt der Vorlagentext. |
 | `autoStartRunner` | `false` | retry/answer dürfen einen Hintergrundlauf für den gesamten State starten; --start erlaubt es pro Aufruf. |
 | `maxRunMinutes` | `120` | Agenten-Laufzeitlimit in Minuten; Timeout unterbricht die Aufgabe. |
-| `maxAttempts` | `3` | Fehlversuchsgrenze vor failed und blockierender Frage; Kontingent-Outages zählen nicht. |
+| `maxAttempts` | `2` | Fehlversuchsgrenze vor failed und blockierender Frage; Kontingent-Outages zählen nicht. |
 | `fallbackBackoffMinutes` | `30` | Agentensperre in Minuten, wenn der Reset-Zeitpunkt unbekannt ist. |
 | `quotaThresholdPercent` | `97` | Vorab-Sperrgrenze für Kontingentauslastung in Prozent. |
 | `reimportMinutes` | `30` | Jira-Import-Cache und Aktualisierungsintervall für work --jql in Minuten; --reimport erzwingt Import. |
@@ -389,7 +389,7 @@ Details zu Migration/Pfaden stehen in [CONFIGURATION.md](CONFIGURATION.md).
 `status` zeigt Aufgaben, Kontingente und Fragen. `log [TASK|AGENT] -f [-n N]` verfolgt Aktivität.
 `report` schreibt einen HTML-Bericht mit Zeitstempel nach resultsDir; die Live-Ansicht liegt in
 runtimeDir/report.html. `serve [--no-open]` startet die lokale UI; run/work starten sie bei Aktivierung
-automatisch. Das Terminal zeigt die URL mit Token. Diese URL und Logs vertraulich behandeln.
+automatisch. Das Terminal zeigt die URL mit Token. Das Token liegt in `<runtimeDir>/ui-token` und bleibt über Neustarts gleich (Lesezeichen funktionieren; Datei löschen erzeugt ein neues). Nach dem letzten Auftrag beendet sich ardai nicht, solange die Oberfläche aktiv ist: die Statusseite bleibt erreichbar, Strg+C beendet. Diese URL und Logs vertraulich behandeln.
 
 `stop <ID>` beendet den Prozessbaum, versucht Autosave/Push und lässt stopped bis retry bestehen;
 `stop` beendet alle Agenten und den Runner. `clean <ID>` löscht lokale/Remote-Task-Branches,
@@ -412,7 +412,7 @@ werden sie zu Fragen. Ticketupdates nutzen kurze Agenten-MCP-Aufrufe; fehlende A
   Domain- und Secret-Grenzen sind Protokollregeln, keine Betriebssystem-Sandbox.
   Nur vertrauenswürdige Projekte, Konfigurationen, Aufgaben und Zusätze verwenden;
   ausführbare Programme und Argumentlisten prüfen.
-- Der Webserver bindet 127.0.0.1, prüft Host und verlangt bei jeder Anfrage ein zufälliges Token pro Start.
+- Der Webserver bindet 127.0.0.1, prüft Host und verlangt bei jeder Anfrage ein zufälliges Token (einmal erzeugt, in `<runtimeDir>/ui-token` gespeichert).
   Lokal halten und die Token-URL nicht veröffentlichen.
 
 ## Grenzen
