@@ -11,6 +11,7 @@ import { taskPrompt, resumePrompt, importPrompt } from './lib/prompts.mjs';
 import { spawn } from 'node:child_process';
 import { renderReport, buildReportHtml } from './lib/report.mjs';
 import { runSourceAction, killTree, isAlive } from './lib/sources.mjs';
+import { JiraClient, loadJiraAuth, applyAction, REST_ACTIONS } from './lib/jira.mjs';
 import { startServer } from './lib/server.mjs';
 import { makeT } from './lib/i18n.mjs';
 import { planPhaseTests } from './lib/phasetests.mjs';
@@ -208,13 +209,14 @@ function startTask(agent, task) {
   const secretsProvided = isPhaseTest && provideLocalSecrets(wt);
   const prompt = resume
     ? resumePrompt(task, protocolAddendum(repoRoot, brand, config.protocolAddendum), brand.cli)
-    : taskPrompt({ task, agent, otherTasks: running(), takeover, answers, contextDocs: config.contextDocs || [], cli: brand.cli, jiraCloudId: config.source?.cloudId || '', priorResults, secretsProvided, localSecrets: config.phaseTestLocalSecrets, composeProject: config.phaseTestComposeProject, protocolAddendum: protocolAddendum(repoRoot, brand, config.protocolAddendum) });
+    : taskPrompt({ task, agent, otherTasks: running(), takeover, answers, contextDocs: config.contextDocs || [], cli: brand.cli, jiraCloudId: config.source?.cloudId || '', jiraManaged: Boolean(jiraRest()), priorResults, secretsProvided, localSecrets: config.phaseTestLocalSecrets, composeProject: config.phaseTestComposeProject, protocolAddendum: protocolAddendum(repoRoot, brand, config.protocolAddendum) });
 
   // Kleine Aufgaben laufen mit einem schnelleren Modell bzw. weniger Reasoning (config: agents.<name>.bySize)
   const sizeArgs = config.agents[agent].bySize?.[task.size]?.args || [];
   const sizeLabel = config.agents[agent].bySize?.[task.size]?.label;
 
   task.status = 'running';
+  if (!task.jiraStarted) { task.jiraStarted = true; queueSourceAction(task, 'started'); }
   task.assignedAgent = agent;
   task.attempts = (task.attempts || 0) + 1;
   addNote(task, `${resume ? 'Fortsetzung' : takeover ? 'Übernahme' : 'Start'} durch ${agent} (Versuch ${task.attempts}${task.size ? `, Größe ${task.size}` : ''}${sizeLabel ? ` → ${sizeLabel}` : ''})`);
@@ -336,6 +338,13 @@ function finishTask(agent, task, wt, outcome) {
       if (merge.ok) {
         task.status = DONE;
         addNote(task, `Fertig, in ${config.integrationBranch} gemergt. ${result.summary || ''}`.trim());
+        const tests = result.tests || [];
+        const passed = tests.filter((x) => x.result === 'pass').length;
+        queueSourceAction(task, 'review', { comment: [
+          t('jira.comment.review', { task: task.id, branch: task.branch, target: config.integrationBranch }),
+          result.summary || '',
+          tests.length ? t('jira.comment.tests', { passed, total: tests.length }) : '',
+        ].filter(Boolean).join('\n\n') });
       } else {
         task.mergeConflicts = (task.mergeConflicts || 0) + 1;
         task.notes = [...(task.notes || []), `Merge-Konflikt mit ${config.integrationBranch}: zuerst "git merge ${config.integrationBranch}" im Task-Branch ausführen, Konflikte lösen, Tests erneut prüfen.`];
@@ -359,6 +368,7 @@ function finishTask(agent, task, wt, outcome) {
 function retryOrFail(task, reason) {
   if (task.attempts >= config.maxAttempts) {
     task.status = 'failed';
+    queueSourceAction(task, 'failed', { comment: t('jira.comment.failed', { task: task.id, branch: task.branch, attempts: task.attempts, reason: String(reason).slice(0, 500) }) });
     addNote(task, `Aufgegeben nach ${task.attempts} Versuchen: ${reason}`);
     state.questions.push({
       id: `Q${state.nextQuestion++}`, taskId: task.id, agent: ORCHESTRATOR_AGENT, at: nowIso(), blocking: true, answer: null,
@@ -715,13 +725,26 @@ function spawnRunner(source = null) {
 
 // ---------------------------------------------------------------- Ticket-Aktualisierungen
 
-function queueSourceAction(task, type) {
+// Direkter REST-Zugang (kein Agent, keine Tokens); null ohne E-Mail/API-Token.
+let jiraClientCache;
+function jiraRest() {
+  if (jiraClientCache === undefined) {
+    const auth = config.source ? loadJiraAuth({ config, repoRoot }) : null;
+    jiraClientCache = auth ? new JiraClient(auth) : null;
+  }
+  return jiraClientCache;
+}
+
+const REST_ONLY = new Set(['started', 'review', 'failed']);
+
+function queueSourceAction(task, type, extra = {}) {
   if (!config.source || task.jira === false || task.type === 'phase-test') return;
+  if (REST_ONLY.has(type) && !jiraRest()) return; // ohne REST-Zugang übernehmen die Agenten das Ticket selbst
   const q = (state.sourceActions ||= []);
   const pendingStop = q.findIndex((a) => a.taskId === task.id && a.type === 'stopped' && !a.sending);
   if (type === 'resumed' && pendingStop >= 0) { q.splice(pendingStop, 1); return; } // Stopp nie gesendet: nichts zu tun
   if (type === 'cleaned' && pendingStop >= 0) q.splice(pendingStop, 1);
-  q.push({ id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, taskId: task.id, type, branch: task.branch, at: nowIso(), tries: 0 });
+  q.push({ id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, taskId: task.id, type, branch: task.branch, at: nowIso(), tries: 0, ...extra });
   log(t('source.pending', { task: task.id, action: type }));
 }
 
@@ -737,12 +760,25 @@ async function processSourceActions() {
   if (!isRunner && (runnerAlive() || Date.now() - runnerSpawnedAt < 20_000)) return false;
   const next = (state.sourceActions || []).find((a) => !a.retryAt || new Date(a.retryAt).getTime() <= Date.now());
   if (!next) return false;
-  const agent = Object.keys(config.agents).find((n) => config.agents[n].enabled && isAvailable(n));
-  if (!agent) return false;
+  const rest = jiraRest();
+  const agent = rest ? null : Object.keys(config.agents).find((n) => config.agents[n].enabled && isAvailable(n));
+  if (!rest && !agent) return false;
   sourceBusy = true;
   const { id, taskId, type } = next;
   try {
-    const r = await runSourceAction(next, { src: config.source, t, agent, agentCfg: agentCfgFor(agent), runtimeDir });
+    let r;
+    if (rest && REST_ACTIONS.has(type)) {
+      try {
+        await applyAction(rest, next, { src: config.source, t: (k, v) => t(k, v) });
+        r = { ok: true };
+      } catch (err) {
+        r = { ok: false, error: err.message };
+      }
+    } else if (agent) {
+      r = await runSourceAction(next, { src: config.source, t, agent, agentCfg: agentCfgFor(agent), runtimeDir });
+    } else {
+      r = { ok: false, error: 'kein Agent frei' };
+    }
     if (r.ok) {
       dropAction(id);
       log(t('source.sent', { task: taskId, action: type }));
@@ -752,7 +788,7 @@ async function processSourceActions() {
       cur.lastError = r.error;
       cur.retryAt = new Date(Date.now() + 2 ** cur.tries * 60_000).toISOString(); // 2, 4 min …
       log(t('source.failed', { task: taskId, action: type, error: r.error }));
-      if (r.outage) block(agent, r.resetsAt || Date.now() + config.fallbackBackoffMinutes * 60_000, 'Outage bei Ticket-Aktualisierung');
+      if (r.outage && agent) block(agent, r.resetsAt || Date.now() + config.fallbackBackoffMinutes * 60_000, 'Outage bei Ticket-Aktualisierung');
       if (cur.tries >= 3) {
         dropAction(id);
         state.questions.push({

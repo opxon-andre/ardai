@@ -322,6 +322,12 @@ These are optional runtime/loader settings not present in the raw default config
 | `runtimeDir` | `".orchestrator"` | Central state, logs, lock, inbox and live report; overrides brand.runtimeDir. |
 | `protocolAddendum` | `"ardai.protocol.md"` | Without explicit setting: brand filename, then legacyNames.protocolFiles; explicit missing path loads no addendum. |
 | `source.stoppedLabel` | `"ardai:stopped"` | Stop label; also recognize brand.legacyNames.stoppedLabels and remove them on resume/clean. |
+| `source.jiraEmail` | `""` | Atlassian account e-mail for direct REST access (env `ARDAI_JIRA_EMAIL`). With a token, status/comment/label updates are sent by ardai itself, without agent tokens. |
+| `source.tokenFile` | `""` | Git-ignored file with the Atlassian API token (env `ARDAI_JIRA_TOKEN`); never shown to agents. |
+| `source.inProgressStatus` | `"In Progress"` | Status set when work starts (REST only). |
+| `source.reviewStatus` | `"In Review"` | Status set after a successful merge, with a comment (REST only). |
+| `source.todoStatus` | `"To Do"` | Status set by clean (REST). |
+| `source.failedLabel` | `"AC:Issue"` | Label added when a task is given up (REST only). |
 | `codeGraph.python` | `unset` | Python executable with code_review_graph installed; %VARIABLE% supported. Builds/updates per worktree, adds MCP with auto-watch. |
 | `contextDocs[].path` | `unset` | Project-relative document reference; agent is instructed to read it. |
 | `contextDocs[].note` | `unset` | Optional context note, e.g. obsolete sections to ignore. |

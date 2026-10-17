@@ -325,6 +325,12 @@ Optionale Laufzeit-/Loader-Einstellungen außerhalb der rohen Default-Config:
 | `runtimeDir` | `".orchestrator"` | Zentraler State, Logs, Lock, Inbox und Live-Bericht; überschreibt brand.runtimeDir. |
 | `protocolAddendum` | `"ardai.protocol.md"` | Ohne expliziten Wert: Branding-Datei, dann legacyNames.protocolFiles; ein expliziter fehlender Pfad lädt keinen Zusatz. |
 | `source.stoppedLabel` | `"ardai:stopped"` | Stopp-Label; zusätzlich werden brand.legacyNames.stoppedLabels erkannt und bei Resume/Clean entfernt. |
+| `source.jiraEmail` | `""` | Atlassian-Konto-E-Mail für direkten REST-Zugriff (Env `ARDAI_JIRA_EMAIL`). Mit Token sendet ardai Status-, Kommentar- und Label-Änderungen selbst, ohne Agent-Tokens. |
+| `source.tokenFile` | `""` | Gitignorierte Datei mit dem Atlassian-API-Token (Env `ARDAI_JIRA_TOKEN`); Agenten sehen ihn nie. |
+| `source.inProgressStatus` | `"In Progress"` | Status beim Start der Arbeit (nur REST). |
+| `source.reviewStatus` | `"In Review"` | Status nach erfolgreichem Merge, mit Kommentar (nur REST). |
+| `source.todoStatus` | `"To Do"` | Status bei clean (REST). |
+| `source.failedLabel` | `"AC:Issue"` | Label, wenn eine Aufgabe aufgegeben wird (nur REST). |
 | `codeGraph.python` | `unset` | Python-Programm mit installiertem code_review_graph; %VARIABLE% möglich. Build/Update je Worktree, MCP mit auto-watch. |
 | `contextDocs[].path` | `unset` | Projektrelative Dokumentreferenz; Agent erhält Leseauftrag. |
 | `contextDocs[].note` | `unset` | Optionaler Kontexthinweis, etwa zu ignorierende überholte Abschnitte. |
