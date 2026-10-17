@@ -32,3 +32,6 @@ results/
 
 # Generated local code index
 .code-review-graph/
+
+# Leftovers of interrupted reliability tests
+test/.reliability-*/
