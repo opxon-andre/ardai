@@ -69,3 +69,13 @@ test('selection ranks resume, phase test, preferred agent and domain with stable
   assert.equal(select([plain, task('tie')]), plain);
   assert.deepEqual(tasks, before);
 });
+
+test('a task is not held back for a busy preferred agent, only for an idle one', () => {
+  const task = { id: 'T-1', status: 'ready', preferredAgent: 'claude', domain: ['a/'], dependsOn: [], resources: [] };
+  const idle = selectTask('codex', [task], agents, { isAvailable: () => true, busyAgents: new Set() });
+  assert.equal(idle, null, 'idle preferred agent keeps its task');
+  const busy = selectTask('codex', [task], agents, { isAvailable: () => true, busyAgents: new Set(['claude']) });
+  assert.equal(busy, task, 'busy preferred agent releases its task to a free agent');
+  const strict = selectTask('codex', [task], agents, { isAvailable: () => true, busyAgents: new Set(['claude']), stealWhenBusy: false });
+  assert.equal(strict, null, 'stealWhenBusy=false restores the strict reservation');
+});

@@ -168,7 +168,7 @@ function block(name, untilMs, reason) {
 // ---------------------------------------------------------------- Auswahl
 
 function selectTask(agent) {
-  return selectPlannedTask(agent, state.tasks, config.agents, { inScope, isAvailable });
+  return selectPlannedTask(agent, state.tasks, config.agents, { inScope, isAvailable, busyAgents: new Set(activeRuns.keys()), stealWhenBusy: config.scheduling?.stealWhenBusy !== false });
 }
 
 // ---------------------------------------------------------------- Ausführung
