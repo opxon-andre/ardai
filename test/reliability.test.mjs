@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { patchTask, followUpIdentity } from '../lib/task-edits.mjs';
 import { CONFIG_NAME, loadProject } from '../lib/project.mjs';
 import { taskPrompt, resumePrompt } from '../lib/prompts.mjs';
+import { prepareReload } from '../lib/reload.mjs';
 
 const cli = fileURLToPath(new URL('../orchestrator.mjs', import.meta.url));
 const agents = { claude: {}, codex: {} };
@@ -93,6 +94,10 @@ test('every state-mutating CLI command uses the inbox with a stub runner', (t) =
   assert.deepEqual(inbox[14].args[0].keys, ['ARDAI-A1', 'X-FIX-1']);
   assert.equal(path.isAbsolute(inbox[15].args[0].file), true);
   assert.deepEqual(inbox[16].args[0].keys, ['local-fix']);
+  success(run(f.root, 'archive', 'ARDAI-A1', 'X-FIX-1'));
+  const batch = fs.readFileSync(path.join(f.runtime, 'inbox.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
+  assert.deepEqual(batch, { cmd: 'archive', args: ['ARDAI-A1', 'X-FIX-1'] });
+  assert.deepEqual(fs.readFileSync(f.file), before);
 });
 
 test('retry and answer default to no background runner and explain explicit start', (t) => {
@@ -191,3 +196,168 @@ for (const command of ['retry', 'answer']) {
     });
   }
 }
+
+
+test('bulk archive validates the whole batch and supports restoring multiple tasks', (t) => {
+  const f = fixture(t);
+  const ids = f.state.tasks.map((task) => task.id);
+  const before = fs.readFileSync(f.file, 'utf8');
+  for (const args of [[], [ids[0], 'missing']]) {
+    assert.equal(run(f.root, 'archive', ...args).status, 1);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), before);
+  }
+  f.state.tasks[1].status = 'running';
+  f.write();
+  assert.equal(run(f.root, 'archive', ...ids).status, 1);
+  assert.ok(f.read().tasks.every((task) => !task.archivedAt));
+  f.state.tasks[1].status = 'done';
+  f.write();
+  success(run(f.root, 'archive', ...ids, ids[0]));
+  assert.ok(f.read().tasks.every((task) => task.archivedAt));
+  assert.equal(f.read().tasks[0].history.filter((entry) => entry.note === 'Archiviert').length, 1);
+  success(run(f.root, 'unarchive', ...ids));
+  assert.ok(f.read().tasks.every((task) => !task.archivedAt && task.keepActive));
+});
+
+
+test('web archive API accepts batches and rejects invalid input without changing state', async (t) => {
+  const f = fixture(t);
+  const env = { ...process.env };
+  delete env.ORCHESTRATOR_CONFIG;
+  const child = spawn(process.execPath, [cli, 'serve', '--no-open'], { cwd: f.root, env, windowsHide: true });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  try {
+    await until(() => /http:\/\/127\.0\.0\.1:\d+\/\?t=/.test(output), 'UI did not start: ' + output);
+    const url = new URL(output.match(/http:\/\/127\.0\.0\.1:\d+\/\?t=[A-Za-z0-9_-]+/)[0]);
+    const post = (body) => fetch(new URL('/api/archive', url), {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Orchestrator-Token': url.searchParams.get('t') }, body: JSON.stringify(body),
+    });
+    const before = fs.readFileSync(f.file, 'utf8');
+    for (const tasks of [[], 'ARDAI-A1', [null], ['ARDAI-A1', 'missing']]) {
+      const res = await post({ tasks });
+      assert.equal(res.status, 400);
+      assert.equal(fs.readFileSync(f.file, 'utf8'), before);
+    }
+    const res = await post({ tasks: ['ARDAI-A1', 'X-FIX-1'] });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).ok, true);
+    assert.ok(f.read().tasks.every((task) => task.archivedAt));
+  } finally {
+    child.kill();
+    await until(() => child.exitCode !== null || child.signalCode !== null, 'UI did not stop');
+  }
+});
+
+for (const mode of ['serve', 'run', 'work', 'serve-with-runner', 'active-work']) {
+  test(`reload replaces ${mode} on the same URL and reads changed configuration`, async (t) => {
+    const f = fixture(t, { language: 'en', tickSeconds: 0.1, ui: { port: 47421 } });
+    initGit(f.root);
+    const active = mode === 'active-work';
+    const gate = path.join(f.root, 'release-agent');
+    const marker = path.join(f.root, 'agent-started');
+    if (active) {
+      const configFile = path.join(f.root, CONFIG_NAME);
+      const cfg = JSON.parse(fs.readFileSync(configFile));
+      const mock = `const fs = require('node:fs'); process.stdin.resume(); fs.writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => { if (fs.existsSync(${JSON.stringify(gate)})) process.exit(1); }, 25);`;
+      Object.assign(cfg, { maxAttempts: 1, worktreeRoot: 'worktrees', checkpointMinutes: 0 });
+      cfg.agents.claude = { enabled: true, command: process.execPath, commandPrefix: ['-e', mock, '--'], args: [] };
+      fs.writeFileSync(configFile, JSON.stringify(cfg));
+      Object.assign(f.state.tasks[0], { status: 'ready', branch: 'task/ARDAI-A1' });
+      Object.assign(f.state.tasks[1], { status: 'ready', branch: 'task/X-FIX-1' });
+      f.write();
+    }
+    const env = { ...process.env };
+    delete env.ORCHESTRATOR_CONFIG;
+    let runner, runnerSuccessor;
+    if (mode === 'serve-with-runner') {
+      runner = spawn(process.execPath, [cli, 'run', '--no-ui'], { cwd: f.root, env, windowsHide: true, stdio: 'ignore' });
+    }
+    const child = spawn(process.execPath, [cli, mode === 'serve-with-runner' ? 'serve' : active ? 'work' : mode, ...(mode === 'work' || active ? ['ARDAI-A1'] : []), '--no-open'], { cwd: f.root, env, windowsHide: true });
+    let output = '', successor;
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    try {
+      if (runner) await until(() => fs.existsSync(path.join(f.runtime, 'run.lock')), 'Background runner did not start');
+      await until(() => /http:\/\/127\.0\.0\.1:\d+\/\?t=/.test(output), 'UI did not start: ' + output);
+      const url = new URL(output.match(/http:\/\/127\.0\.0\.1:\d+\/\?t=[A-Za-z0-9_-]+/)[0]);
+      const headers = { 'X-Orchestrator-Token': url.searchParams.get('t') };
+      const before = await (await fetch(url)).text();
+      assert.match(before, /data-action="reload">Reload changes/);
+      if (active) await until(() => fs.existsSync(marker), 'Mock agent did not start: ' + output);
+      const configFile = path.join(f.root, CONFIG_NAME);
+      const cfg = JSON.parse(fs.readFileSync(configFile));
+      cfg.language = 'de';
+      fs.writeFileSync(configFile, JSON.stringify(cfg));
+      const endpoint = new URL('/api/reload', url);
+      assert.equal((await fetch(endpoint, { method: 'POST' })).status, 403);
+      assert.equal(child.exitCode, null);
+      const res = await fetch(endpoint, { method: 'POST', headers });
+      assert.equal(res.status, 200);
+      assert.equal((await res.json()).ok, true);
+      if (active) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        assert.equal(child.exitCode, null, 'Reload must wait for the running agent');
+        assert.equal(f.read().tasks[0].status, 'running');
+        assert.equal(f.read().tasks[1].attempts, undefined, 'No other task starts during drain');
+        fs.writeFileSync(gate, 'finish');
+      }
+      await until(() => child.exitCode !== null, 'Old process did not exit: ' + output);
+      let html = '';
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        try {
+          const page = await fetch(url, { signal: AbortSignal.timeout(1000) });
+          html = await page.text();
+          const pid = Number(html.match(/data-ui-instance="(\d+)"/)?.[1]);
+          if (page.ok && pid && pid !== child.pid) { successor = pid; break; }
+        } catch { /* socket may be closed during handoff */ }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(successor, 'Replacement did not serve the same URL: ' + fs.readFileSync(path.join(f.runtime, 'reload.log'), 'utf8'));
+      assert.match(html, /data-action="reload">Änderungen neu laden/);
+      assert.deepEqual(f.read().tasks.map((task) => task.id), f.state.tasks.map((task) => task.id));
+      if (mode === 'run' || mode === 'work' || active) assert.equal(Number(fs.readFileSync(path.join(f.runtime, 'run.lock'), 'utf8')), successor);
+      if (active) {
+        assert.equal(f.read().tasks[0].status, 'failed', 'Agent result is finalized before handoff');
+        assert.equal(f.read().tasks[0].attempts, 1);
+        assert.equal(f.read().tasks[1].attempts, undefined, 'Replacement retains the work scope');
+      }
+      if (runner) {
+        await until(() => {
+          try {
+            const pid = Number(fs.readFileSync(path.join(f.runtime, 'run.lock'), 'utf8'));
+            if (pid !== runner.pid) { runnerSuccessor = pid; return true; }
+          } catch {}
+          return false;
+        }, 'Background runner did not reload');
+      }
+    } finally {
+      child.kill();
+      if (active && fs.existsSync(marker)) {
+        try { process.kill(Number(fs.readFileSync(marker, 'utf8'))); } catch {}
+      }
+      if (successor) process.kill(successor);
+      runner?.kill();
+      if (runnerSuccessor) process.kill(runnerSuccessor);
+      await until(() => {
+        if (child.exitCode === null && child.signalCode === null) return false;
+        if (successor) { try { process.kill(successor, 0); return false; } catch {} }
+        if (runner && runner.exitCode === null && runner.signalCode === null) return false;
+        if (runnerSuccessor) { try { process.kill(runnerSuccessor, 0); return false; } catch {} }
+        return true;
+      }, 'Reload test processes did not exit');
+      // Windows releases a detached process's cwd shortly after its PID disappears.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  });
+}
+
+test('invalid replacement code fails preparation without replacing the live process', async (t) => {
+  const f = fixture(t);
+  const script = path.join(f.root, 'broken.mjs');
+  fs.writeFileSync(script, 'invalid javascript syntax!');
+  await assert.rejects(prepareReload({ script, args: [], cwd: f.root, logFile: path.join(f.runtime, 'reload.log'), context: {} }), /Reload failed/);
+  assert.match(fs.readFileSync(path.join(f.runtime, 'reload.log'), 'utf8'), /SyntaxError/);
+});

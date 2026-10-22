@@ -194,7 +194,7 @@ Ein abgeschlossener Prozess mit Ergebnisstatus done ohne fehlgeschlagene Tests e
 Der Runner beweist nicht selbst, dass jedes Akzeptanzkriterium getestet wurde; das fordert das Protokoll.
 Jira „In Review“ und interner Task-Status done sind verschiedene Begriffe.
 Archivierung setzt `archivedAt`, keinen neuen Status. Automatisch wird archiviert, sobald der
-Task-Branch in main enthalten ist. Manuelles archive/unarchive ist ebenfalls möglich.
+Task-Branch in main enthalten ist. Manuelles archive/unarchive ist ebenfalls möglich. Aufgabenlisten zeigen die zuletzt hinzugefügten Aufgaben zuerst. In der Web-Oberfläche lassen sich fertige, gestoppte oder fehlgeschlagene Aufgaben per Checkbox markieren und mit **Auswahl archivieren** gemeinsam archivieren. Die Checkbox im Tabellenkopf wählt alle geeigneten Aufgaben aus. Auch die CLI unterstützt mehrere IDs: `ardai archive TASK-1 TASK-2`.
 
 ### Kontingent-Übernahme bei Outage
 
@@ -390,6 +390,16 @@ Details zu Migration/Pfaden stehen in [CONFIGURATION.md](CONFIGURATION.md).
 `report` schreibt einen HTML-Bericht mit Zeitstempel nach resultsDir; die Live-Ansicht liegt in
 runtimeDir/report.html. `serve [--no-open]` startet die lokale UI; run/work starten sie bei Aktivierung
 automatisch. Das Terminal zeigt die URL mit Token. Das Token liegt in `<runtimeDir>/ui-token` und bleibt über Neustarts gleich (Lesezeichen funktionieren; Datei löschen erzeugt ein neues). Nach dem letzten Auftrag beendet sich ardai nicht, solange die Oberfläche aktiv ist: die Statusseite bleibt erreichbar, Strg+C beendet. Diese URL und Logs vertraulich behandeln.
+
+**Änderungen neu laden** in der Web-Oberfläche lädt die installierten Programmdateien und
+die Konfiguration durch einen Neustart von ardai. Laufende Aufgaben und Ticketupdates werden
+zuerst abgeschlossen; währenddessen starten keine neuen Agenten. Aufgaben, der aktuelle
+Auftragsumfang, URL und Zugangs-Token bleiben erhalten. Die Browserseite lädt automatisch neu.
+Auch ein separater Hintergrund-Runner erhält die Aufforderung zum Neuladen. Der neue Prozess
+läuft im Hintergrund und schreibt nach `<runtimeDir>/reload.log`; `ardai stop` beendet den Runner.
+Bei ungültigem neuem Code oder ungültiger Konfiguration läuft der bisherige Prozess weiter.
+Der Button lädt keine Updates herunter. Nach Einbau dieser Funktion einmal manuell neu starten,
+damit der Button erscheint.
 
 `stop <ID>` beendet den Prozessbaum, versucht Autosave/Push und lässt stopped bis retry bestehen;
 `stop` beendet alle Agenten und den Runner. `clean <ID>` löscht lokale/Remote-Task-Branches,

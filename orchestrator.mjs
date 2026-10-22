@@ -15,6 +15,7 @@ import { runSourceAction, killTree, isAlive } from './lib/sources.mjs';
 import { createPolisher } from './lib/ollama.mjs';
 import { JiraClient, loadJiraAuth, applyAction, REST_ACTIONS } from './lib/jira.mjs';
 import { startServer } from './lib/server.mjs';
+import { receiveReload, prepareReload } from './lib/reload.mjs';
 import { makeT } from './lib/i18n.mjs';
 import { planPhaseTests } from './lib/phasetests.mjs';
 import { RUNNABLE, depsDone as dependenciesDone, selectTask as selectPlannedTask } from './lib/planning.mjs';
@@ -54,6 +55,7 @@ if (cmd === 'step' || cmd === 'handoff') {
 let project;
 try { project = loadProject({ init: cmd === 'init' }); }
 catch (err) { console.error(err.message); process.exit(1); }
+const reloadContext = await receiveReload();
 const { repoRoot, config, runtimeDir, stateFile, reportFile, hintsFile, resultsDir, lockFile, inboxFile, logDir } = project;
 const link = (file) => pathToFileURL(file).href; // in VS Code/Windows Terminal per Strg+Klick öffnbar
 const git = new Git(repoRoot, config);
@@ -176,7 +178,7 @@ function block(name, untilMs, reason) {
 // ---------------------------------------------------------------- Auswahl
 
 function selectTask(agent) {
-  return selectPlannedTask(agent, state.tasks, config.agents, { inScope, isAvailable, busyAgents: new Set(activeRuns.keys()), stealWhenBusy: config.scheduling?.stealWhenBusy !== false });
+  return selectPlannedTask(agent, state.tasks, config.agents, { inScope, isAvailable, busyAgents: new Set(activeRuns.keys()), stealWhenBusy: config.scheduling?.stealWhenBusy !== false, softDomains: config.scheduling?.softDomains || [] });
 }
 
 // ---------------------------------------------------------------- Ausführung
@@ -456,8 +458,14 @@ let isRunner = false;               // true im Prozess von run/work
 const stopRequested = new Set();    // Aufgaben, deren Agent gerade beendet wird
 const cleanAfterStop = new Set();   // nach dem Stoppen gleich bereinigen
 let shutdownRequested = false;      // "alles stoppen": danach beendet sich ardai
+let reloadRequested = false;
 
 async function applyCommand(cmd, args = []) {
+  if (cmd === 'reload') {
+    reloadRequested = true;
+    wake();
+    return t('reload.waiting');
+  }
   if (cmd === 'patch') {
     const task = taskById(args[0]);
     if (!task) throw new Error(`Unknown task / Unbekannte Aufgabe: ${args[0]}`);
@@ -527,19 +535,26 @@ async function applyCommand(cmd, args = []) {
     return t('overage.set', { agent: name, state: t(enabled ? 'ui.on' : 'ui.off') });
   }
   if (cmd === 'archive' || cmd === 'unarchive') {
-    const task = taskById(args[0]);
-    if (!task) throw new Error(t('clean.unknown', { task: args[0] }));
-    if (cmd === 'archive') {
-      if (task.status === 'running') throw new Error(`${task.id} läuft noch – erst stoppen.`);
-      task.archivedAt = nowIso();
-      delete task.keepActive;
-      addNote(task, 'Archiviert');
-      return t('archive.done', { task: task.id });
-    }
-    delete task.archivedAt;
-    task.keepActive = true; // nicht sofort wieder automatisch archivieren
-    addNote(task, 'Aus dem Archiv zurückgeholt');
-    return t('archive.restored', { task: task.id });
+    if (!args.length || args.some((id) => typeof id !== 'string' || !id.trim())) throw new Error('Mindestens eine Aufgaben-ID angeben.');
+    // Validate the complete batch before changing anything, including inbox commands.
+    const tasks = [...new Set(args)].map((id) => {
+      const task = taskById(id);
+      if (!task) throw new Error(t('clean.unknown', { task: id }));
+      if (cmd === 'archive' && task.status === 'running') throw new Error(`${task.id} läuft noch – erst stoppen.`);
+      return task;
+    });
+    return tasks.map((task) => {
+      if (cmd === 'archive') {
+        task.archivedAt = nowIso();
+        delete task.keepActive;
+        addNote(task, 'Archiviert');
+        return t('archive.done', { task: task.id });
+      }
+      delete task.archivedAt;
+      task.keepActive = true; // nicht sofort wieder automatisch archivieren
+      addNote(task, 'Aus dem Archiv zurückgeholt');
+      return t('archive.restored', { task: task.id });
+    }).join('\n');
   }
   if (cmd === 'stop') return stopCommand(args[0]);
   if (cmd === 'clean') return cleanCommand(args[0]);
@@ -856,6 +871,7 @@ async function importTasks({ keys = [], jql = null, file = null, force = false }
     const run = new AgentRun({
       name: agent, agentCfg: agentCfgFor(agent), cwd: repoRoot, prompt: importPrompt({ keys, jql }, out, config),
       logFile: path.join(runtimeDir, 'logs', `import-${agent}-${Date.now()}.jsonl`), maxRunMinutes: 30,
+      extraArgs: config.agents[agent].bySize?.M?.args || [], // Standard-Werkzeugliste ohne Unter-Agents
     });
     const outcome = await run.start();
     if (outcome.outage) block(agent, outcome.resetsAt || Date.now() + config.fallbackBackoffMinutes * 60_000, 'Outage beim Import');
@@ -919,6 +935,7 @@ function finishOrStayIdle(message) {
 }
 
 async function cmdRun(args, { source = null } = {}) {
+  if (reloadContext?.runner) source = reloadContext.source;
   const other = runnerAlive();
   if (other) { console.error(`Orchestrator läuft bereits (PID ${other}).`); process.exit(1); }
   isRunner = true;
@@ -959,7 +976,10 @@ async function cmdRun(args, { source = null } = {}) {
       return false;
     }
   };
-  if (source) {
+  if (reloadContext?.runner) {
+    scope = reloadContext.scope === null ? null : new Set(reloadContext.scope);
+    lastImport = Date.now();
+  } else if (source) {
     scope = new Set();
     while (!(await reimport())) await new Promise((r) => setTimeout(r, config.tickSeconds * 1000));
     if (!scope.size) { log('Keine Aufgaben gefunden.'); process.exit(0); }
@@ -975,6 +995,26 @@ async function cmdRun(args, { source = null } = {}) {
   for (;;) {
     try {
     await processInbox();
+    if (shutdownRequested) reloadRequested = false;
+    if (reloadRequested) {
+      // Drain current work; no new agents, imports or source actions until handoff.
+      if (!activeRuns.size && !sourceBusy && !flushing) {
+        try {
+          save();
+          const restart = await prepareUiReload({ runner: true, source, scope: scope ? [...scope] : null });
+          restart();
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        } catch (err) {
+          reloadRequested = false;
+          log(t('reload.failed'), err.message);
+        }
+      }
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 1000);
+        wake = () => { clearTimeout(timer); resolve(); };
+      });
+      continue;
+    }
     processSourceActions().catch((err) => log('Ticket-Aktualisierung:', err.message)); // läuft nebenher
 
     if (shutdownRequested) {
@@ -1064,7 +1104,18 @@ function uiHtml(token, fragmentOnly) {
     reloadState();
     if (!runnerAlive() && refreshArchive()) save();
   }
-  return buildReportHtml(state, { ...reportData(), activity: liveActivity(), ui: { t, token, runnerAlive: isRunner || Boolean(runnerAlive()) }, fragmentOnly });
+  return buildReportHtml(state, { ...reportData(), activity: liveActivity(), ui: { t, token, runnerAlive: isRunner || Boolean(runnerAlive()), reloadRequested, instance: String(process.pid) }, fragmentOnly });
+}
+
+let uiPort = null;
+function prepareUiReload(context = {}) {
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  return prepareReload({
+    script: fileURLToPath(import.meta.url), args: [cmd, ...args.filter((arg) => arg !== '--open'), ...(cmd === 'serve' ? ['--no-open'] : [])],
+    cwd: process.cwd(), logFile: path.join(runtimeDir, 'reload.log'),
+    context: { ...context, port: uiPort },
+    onError: (err) => { reloadRequested = false; log(t('reload.failed'), err.message); },
+  });
 }
 
 // Stable address: the token is created once and kept in the runtime directory, so bookmarks survive restarts.
@@ -1082,14 +1133,31 @@ function uiToken() {
 
 async function startUi({ open = false } = {}) {
   const ui = await startServer({
-    port: config.ui?.port || 4711,
+    port: reloadContext?.port || config.ui?.port || 4711,
     token: uiToken(),
     t,
     log,
     page: (token) => uiHtml(token, false),
     fragment: (token) => uiHtml(token, true),
     onAction: async (action, body) => {
-      const args = action === 'answer' ? [body.id, body.text] : action === 'work' ? [body] : action === 'overage' ? [body.agent, body.enabled] : [body.task];
+      if (reloadRequested && action === 'reload') throw new Error(t('reload.waiting'));
+      if (action === 'reload') {
+        if (isRunner) {
+          // Process this with the other runner commands, outside HTTP callbacks.
+          return { message: t('reload.waiting'), afterResponse: () => {
+            fs.appendFileSync(inboxFile, JSON.stringify({ cmd: 'reload', args: [] }) + '\n');
+            wake();
+          } };
+        }
+        reloadRequested = true;
+        try {
+          const restart = await prepareUiReload();
+          if (runnerAlive()) fs.appendFileSync(inboxFile, JSON.stringify({ cmd: 'reload', args: [] }) + '\n');
+          return { message: t('reload.waiting'), afterResponse: restart, onCancel: () => { restart.cancel(); reloadRequested = false; } };
+        } catch (err) { reloadRequested = false; throw err; }
+      }
+      const args = action === 'answer' ? [body.id, body.text] : action === 'work' ? [body] : action === 'overage' ? [body.agent, body.enabled] : action === 'archive' && body.tasks !== undefined ? body.tasks : [body.task];
+      if (action === 'archive' && (!Array.isArray(args) || !args.length || args.some((id) => typeof id !== 'string' || !id.trim()))) throw new Error('Mindestens eine Aufgaben-ID angeben.');
       if (action === 'clean' && body.confirm !== body.task) throw new Error('Bestätigung fehlt.');
       if (isRunner || runnerAlive()) {
         if (action === 'work') normalizeSource(body); // Eingabe gleich prüfen, Fehler sofort zurückmelden
@@ -1102,6 +1170,7 @@ async function startUi({ open = false } = {}) {
       return workCommand(body); // Explicit work starts a runner; it owns subsequent state writes.
     },
   });
+  uiPort = ui.port;
   log(t('serve.url', { url: ui.url }));
   if (open) spawn('cmd.exe', ['/c', 'start', '""', ui.url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   return ui;
@@ -1300,7 +1369,7 @@ function printHelp(brand = DEFAULT_BRAND) {
     `  ${brand.cli} clean <TASK-ID>             Aufgabe verwerfen: Branch löschen, Ticket auf To Do`,
     `  ${brand.cli} serve [--no-open]           Web-Oberfläche (auch ohne laufenden Auftrag)`,
     `  ${brand.cli} overage <agent> on|off      kostenpflichtige Kontingente für einen Agenten erlauben (Standard: off)`,
-    `  ${brand.cli} archive|unarchive <TASK-ID> Aufgabe ins Archiv / zurückholen (fertige Aufgaben in main: automatisch)`,
+    `  ${brand.cli} archive|unarchive <TASK-ID> [...] Aufgaben ins Archiv / zurückholen (fertige Aufgaben in main: automatisch)`,
     `  ${brand.cli} report                      Testbericht nach resultsDir schreiben`,
     `  ${brand.cli} init | install-cli          Einrichtung`,
     `Alias: ${brand.aliases.join(', ')}`,

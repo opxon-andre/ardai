@@ -79,3 +79,14 @@ test('a task is not held back for a busy preferred agent, only for an idle one',
   const strict = selectTask('codex', [task], agents, { isAvailable: () => true, busyAgents: new Set(['claude']), stealWhenBusy: false });
   assert.equal(strict, null, 'stealWhenBusy=false restores the strict reservation');
 });
+
+test('soft domains do not serialize tasks that only overlap in append-only areas', () => {
+  const agents = { claude: { enabled: true }, codex: { enabled: true } };
+  const running = { id: 'A', status: 'running', domain: ['Backend/Gateway/routers/', 'Backend/AdWyse/src/'], dependsOn: [] };
+  const sameHard = { id: 'B', status: 'ready', domain: ['Backend/AdWyse/src/', 'Backend/Gateway/routers/'], dependsOn: [] };
+  const softOnly = { id: 'C', status: 'ready', domain: ['Backend/DataHub/', 'Backend/Gateway/routers/', 'docs/schnittstellen/'], dependsOn: [] };
+  const soft = ['Backend/Gateway/routers/', 'docs/schnittstellen/'];
+  assert.equal(selectTask('codex', [running, softOnly], agents, {}), null, 'without soft domains the shared routers area serializes');
+  assert.equal(selectTask('codex', [running, softOnly], agents, { softDomains: soft })?.id, 'C');
+  assert.equal(selectTask('codex', [running, sameHard], agents, { softDomains: soft }), null, 'a real overlap still serializes');
+});

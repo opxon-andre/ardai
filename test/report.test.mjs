@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { makeT } from '../lib/i18n.mjs';
 import { buildReportHtml, renderReport } from '../lib/report.mjs';
 
 test('report uses all results from the latest run per task and excludes archived results', () => {
@@ -78,4 +79,40 @@ test('report surfaces only unresolved visible questions and retains open archive
   assert.doesNotMatch(html, /HIDDEN_/);
   assert.match(html, /<b>1<\/b>offene Fragen/);
   assert.match(html, /<b>1<\/b>Hinweise/);
+});
+
+
+test('task lists show newest additions first without changing scheduler order', () => {
+  const state = { tasks: [
+    { id: 'OLD', status: 'failed' }, { id: 'ARCHIVE-OLD', status: 'done', archivedAt: '2026-01-03' },
+    { id: 'NEW', status: 'ready' }, { id: 'ARCHIVE-NEW', status: 'done', archivedAt: '2026-01-01' },
+  ] };
+  const before = structuredClone(state);
+  for (const fragmentOnly of [true, false]) {
+    const html = buildReportHtml(state, { fragmentOnly });
+    assert.ok(html.indexOf('<td>NEW</td>') < html.indexOf('<td>OLD</td>'));
+    assert.ok(html.indexOf('<td>ARCHIVE-NEW</td>') < html.indexOf('<td>ARCHIVE-OLD</td>'));
+  }
+  assert.deepEqual(state, before);
+});
+
+test('bulk archive selection is available only for eligible active tasks in the live UI', () => {
+  const state = { tasks: ['done', 'stopped', 'failed', 'ready', 'running', 'needs-human', 'interrupted'].map((status) => ({ id: status, status })) };
+  state.tasks.push({ id: 'archived', status: 'done', archivedAt: '2026-01-01' });
+  const html = buildReportHtml(state, { fragmentOnly: true, ui: { t: makeT('en') } });
+  assert.match(html, /data-action="archive-selected" disabled>Archive selected/);
+  assert.match(html, /data-archive-all/);
+  assert.deepEqual([...html.matchAll(/data-archive-task="([^"]+)"/g)].map((m) => m[1]), ['failed', 'stopped', 'done']);
+  const staticHtml = buildReportHtml(state, { fragmentOnly: true });
+  assert.doesNotMatch(staticHtml, /data-archive-task|data-archive-all|archive-selected/);
+  const runningHtml = buildReportHtml({ tasks: [{ id: 'busy', status: 'running' }] }, { fragmentOnly: true, ui: { t: makeT('de') } });
+  assert.doesNotMatch(runningHtml, /data-archive-task|data-archive-all|archive-selected/);
+});
+
+test('live report offers reload and indicates a pending restart', () => {
+  const ui = { t: makeT('de'), instance: '123' };
+  assert.match(buildReportHtml({}, { fragmentOnly: true, ui }), /data-action="reload">Änderungen neu laden/);
+  assert.match(buildReportHtml({}, { fragmentOnly: true, ui: { ...ui, reloadRequested: true } }), /data-action="reload" disabled>Neuladen vorgemerkt/);
+  assert.match(buildReportHtml({}, { ui }), /"instance":"123"/);
+  assert.doesNotMatch(buildReportHtml({}), /data-action="reload"/);
 });

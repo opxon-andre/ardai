@@ -191,7 +191,7 @@ result status done with no failed test entries allows the integration merge. The
 not prove that every acceptance criterion has a test: the agent protocol requires it.
 Jira "In Review" and the internal task state done are different concepts.
 Archival sets `archivedAt`, not a new task status; tasks are automatically archived after
-their branch is contained in main. Manual archive/unarchive is also available.
+their branch is contained in main. Manual archive/unarchive is also available. Task lists show the most recently added tasks first. In the web UI, select completed, stopped or failed tasks with the checkboxes and use **Archive selected**; the header checkbox selects all eligible tasks. The CLI also accepts multiple IDs: `ardai archive TASK-1 TASK-2`.
 
 ### Quota outages and takeover
 
@@ -391,6 +391,15 @@ For detailed migration/path behavior see [CONFIGURATION.md](CONFIGURATION.md).
 `report` writes a timestamped HTML snapshot to resultsDir; the live report is runtimeDir/report.html.
 `serve [--no-open]` starts the local UI; run/work start it automatically when enabled.
 The terminal prints its token-bearing URL. The token is stored in `<runtimeDir>/ui-token` and stays the same across restarts (bookmarks keep working; delete the file for a new one). After the last job ardai keeps running while the UI is active, so the status page stays reachable; Ctrl+C ends it. Protect that URL and logs.
+
+**Reload changes** in the web UI reloads the installed program files and configuration by
+restarting ardai. Running tasks and ticket updates finish first; no new agents start during
+that wait. Tasks, the current job scope, URL and access token are retained, and the browser
+reloads automatically. A separate background runner is also asked to reload. The replacement
+continues in the background and writes its output to `<runtimeDir>/reload.log`; use `ardai stop`
+to stop the runner. Invalid replacement code or configuration leaves the current process running.
+This button does not download updates. After installing this feature, restart manually once
+to make the button available.
 
 `stop <ID>` kills the process tree, attempts autosave/push and leaves stopped work awaiting retry;
 `stop` stops all agents and the runner. `clean <ID>` deletes local/remote task branches and
