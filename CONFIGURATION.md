@@ -2,6 +2,24 @@
 
 ## Projekt finden und konfigurieren
 
+Jira-REST-Aktualisierungen laufen unabhängig vom Haupt-Event-Loop in einem eigenen
+Worker-Thread. `source.maxConcurrency` (Default `4`, erlaubt `1`–`32`) begrenzt die
+Zahl gleichzeitig bearbeiteter Tickets; innerhalb eines Tickets bleibt die Reihenfolge
+erhalten. `source.requestTimeoutSeconds` (Default `45`, erlaubt `1`–`300`) gilt pro
+HTTP-Aufruf samt Antwortinhalt. Diese Parameter in `ardai.config.json` setzen.
+MCP-Import und Coding-Agenten behalten ihre bisherigen Parallelitätsregeln.
+`sync` umgeht lokale Wiederholungszeiten, jedoch keine aktive Jira-`Retry-After`-Pause.
+Beim Leeren der Warteschlange werden höchstens fünf Minuten neue Aktionen gestartet;
+bereits laufende Aktionen werden vor einem geordneten Beenden noch abgeschlossen.
+
+Direktbetrieb und Container-Betrieb verwenden dieselbe Konfiguration.
+[Container-Anleitung](CONTAINER.md): Bind-Mounts, Secrets und Host-Docker.
+`ARDAI_UI_HOST`, `ARDAI_UI_PORT` und `ARDAI_UI_ALLOWED_HOSTS` überschreiben die UI-
+Einstellungen. Standard bleibt `127.0.0.1:4711`. Im Direktbetrieb wird `.env` aus
+dem Aufrufverzeichnis gelesen; vorhandene Prozessvariablen haben Vorrang.
+API-Zugangsdaten können aus den in `CONTAINER.md` beschriebenen `_FILE`-Variablen
+geladen werden, ohne sie in der Projekt-Config zu speichern.
+
 Der erste Ordner mit `ardai.config.json`, vom aktuellen Arbeitsverzeichnis
 aufwärts gesucht, ist die Projektwurzel. Eine verschachtelte Projekt-Config
 beginnt ein eigenes Projekt; die Config darüber wird nicht zusätzlich geladen.
@@ -21,6 +39,12 @@ Werte ergänzen: Es installiert den Hook, erstellt den Integration-Branch und
 die Worktrees und versucht, den Integration-Branch zum Remote zu pushen.
 Ein erster Git-Commit muss vorhanden sein. `install-cli` installiert nur den
 Launcher und benötigt keinen Projektmarker.
+
+Windows und Linux werden unterstützt. Externe Pfade unterstützen `~`, `$VARIABLE`,
+`${VARIABLE}` und `%VARIABLE%`; unbekannte Variablen bleiben unverändert. Der Default
+für `agents.codex.sessionsDir` ist `~/.codex/sessions`. Private Windows-Programmpfade
+auf Linux durch native Befehle oder Linux-Pfade ersetzen. Der Installer erzeugt unter
+Linux ausführbare Shell-Launcher in `~/.local/bin`, unter Windows zusätzlich `.cmd`.
 
 ```mermaid
 flowchart TD

@@ -37,3 +37,22 @@ test('follow-up covers only new work, honors custom done status and avoids ID co
   assert.deepEqual(planned.acceptanceCriteria, []);
   assert.deepEqual(planPhaseTests([...tasks, planned], { doneStatus: 'merged' }), []);
 });
+
+test('runtimeDomains: only tasks touching runtime areas trigger a phase test', () => {
+  const tasks = [impl('A', { domain: ['Frontend/SPA/src/pages/'] }), impl('B', { domain: ['docs/', 'Backend/Gateway/core/'] })];
+  const [planned] = planPhaseTests(tasks, { runtimeDomains: ['Backend/Gateway/', 'Backend/Streamer/'] });
+  assert.deepEqual(planned.dependsOn, ['B']);
+  assert.deepEqual(planPhaseTests([tasks[0]], { runtimeDomains: ['Backend/Gateway/'] }), []);
+  // ohne Konfiguration verhält sich alles wie bisher
+  assert.deepEqual(planPhaseTests(tasks)[0].dependsOn, ['A', 'B']);
+  // ein Nachlauf wird nicht für bereits ignorierte Aufgaben geplant
+  const withTest = [...tasks, impl('E-PHASENTEST', { type: 'phase-test', dependsOn: ['B'] })];
+  assert.deepEqual(planPhaseTests(withTest, { runtimeDomains: ['Backend/Gateway/'] }), []);
+});
+
+test('phase test prompt states the time budget only when configured', async () => {
+  const { taskPrompt } = await import('../lib/prompts.mjs');
+  const task = { id: 'E-PHASENTEST', type: 'phase-test', epic: 'E', title: 't', branch: 'b', domain: [], acceptanceCriteria: [] };
+  assert.match(taskPrompt({ task, agent: 'claude', otherTasks: [], phaseTestBudgetMinutes: 45 }), /Zeitbudget:\*\* Der Phasentest hat höchstens 45 Minuten/);
+  assert.doesNotMatch(taskPrompt({ task, agent: 'claude', otherTasks: [] }), /Zeitbudget/);
+});

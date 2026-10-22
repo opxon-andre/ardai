@@ -1,0 +1,14 @@
+**
+!Dockerfile
+!package.json
+!config.json
+!brand.json
+!orchestrator.mjs
+!LICENSE
+!AGENT_PROTOCOL.md
+!lib/
+!lib/**
+!hooks/
+!hooks/**
+!docker/
+!docker/**

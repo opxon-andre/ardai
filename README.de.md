@@ -12,7 +12,13 @@ Das eigenständige Projekt ist [ardai](https://github.com/opxon-andre/ardai).
 
 ## Installation
 
+Zwei Betriebsmodelle stehen zur Verfügung: direkt mit Node/npm wie unten beschrieben,
+oder als Container mit Bind-Mounts, Secrets und Host-Docker-Zugriff.
+Siehe [Container-Einrichtung](CONTAINER.md). Beide verwenden standardmäßig `127.0.0.1:4711`.
+
 Voraussetzungen: Node.js **24 oder neuer**, Git und authentisierte Claude-Code-/Codex-CLIs.
+Windows und Linux werden unterstützt. Unter Linux müssen die nativen CLIs und Git
+in derselben Umgebung wie Node installiert sein (auch bei Nutzung von WSL).
 Für Jira benötigt der Agent Zugriff auf sein Atlassian-MCP; der Orchestrator hält keine Jira-Zugangsdaten.
 Docker/Playwright sind nur für entsprechende Aufgaben nötig. Es gibt keine npm-Abhängigkeiten.
 
@@ -22,11 +28,28 @@ In der Wurzel des ardai-Repositories:
 node orchestrator.mjs install-cli
 ```
 
-Der Installer erstellt Shell- und .cmd-Launcher für die wirksame CLI und ihre konfigurierten Aliase im Benutzerverzeichnis .local/bin.
+Der Installer erstellt ausführbare Shell-Launcher für die wirksame CLI und ihre konfigurierten Aliase im Benutzerverzeichnis `.local/bin`.
+Unter Windows kommen `.cmd`-Launcher hinzu.
 Dieses Verzeichnis zu PATH hinzufügen, falls der Installer es meldet. Ein optionales
 Verzeichnisargument ändert das Installationsziel. Die Launcher referenzieren diesen Checkout;
 er muss verfügbar bleiben. Alternativ aus dem Zielprojekt
 `node /absoluter/pfad/orchestrator.mjs <Befehl>` aufrufen.
+
+Unter Linux bei Bedarf in das Shell-Profil aufnehmen:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+ardai --help
+```
+
+Auf Linux-Desktops öffnet `xdg-open` (Paket `xdg-utils`) die Oberfläche. Auf einem
+Server ohne Desktop `ardai serve --no-open` und die ausgegebene URL verwenden.
+Für entfernte Server den lokalen UI-Port mit `ssh -L 4711:127.0.0.1:4711 user@server`
+weiterleiten und die ausgegebene Token-URL lokal öffnen. Der Server bindet weiterhin nur Loopback.
+Stoppen und Zeitlimits beenden unter Linux die Prozessgruppe des Agenten einschließlich
+gewöhnlicher Shell-/Test-Unterprozesse. Programme, die sich in eine andere Sitzung abkoppeln,
+und Docker-Container benötigen eine eigene Bereinigung. `SIGTERM` gibt wie Strg+C den
+Runner-Lock frei; `ardai stop` beendet auch die Agenten und sichert deren Arbeit.
 
 ## Schnellstart
 
@@ -271,6 +294,8 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `source` | Objekt (siehe Unterfelder) | Ticketquelle; Jira ist die unterstützte externe Quelle. |
 | `source.type` | `"jira"` | Externer Quelladapter: jira. |
 | `source.cloudId` | `""` | Atlassian-Cloud-ID für Agenten-MCP-Prompts; pro Projekt setzen. |
+| `source.maxConcurrency` | `4` | Gleichzeitige REST-Ticketaktionen (1–32); Aktionen desselben Tickets bleiben geordnet. MCP-Fallback bleibt sequenziell. |
+| `source.requestTimeoutSeconds` | `45` | Zeitlimit je HTTP-Aufruf einschließlich Antwortinhalt (1–300 Sekunden). |
 | `source.todoStatus` | `"To Do"` | Jira-Zielstatus für clean. |
 | `worktreeRoot` | `"../ardai-worktrees"` | Übergeordnetes Worktree-Verzeichnis, ab Projektwurzel aufgelöst. |
 | `integrationBranch` | `"integration"` | Automatisches Merge-Ziel; für sicheren Betrieb von main getrennt halten. |
@@ -315,7 +340,7 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `agents.codex.command` | `"codex"` | CLI-Programm; Umgebungsplatzhalter werden expandiert. Codex bevorzugt unter Windows gegebenenfalls das Desktop-App-Programm. |
 | `agents.codex.fallbackCommand` | `"codex"` | Programm-Fallback, wenn Desktop-Codex nicht gefunden wird. |
 | `agents.codex.args` | `["exec","--json","--dangerously-bypass-approvals-and-sandbox","-c","model=\"gpt-6.1-sol\"","-c","model_reasoning_effort=\"medium\""]` | Basis-CLI-Argumente, unverändert übergeben; Flags zur Umgehung von Berechtigungsabfragen vor Nutzung prüfen. |
-| `agents.codex.sessionsDir` | `"%USERPROFILE%\\.codex\\sessions"` | Codex-Session-Logs zur Kontingentprüfung; %VARIABLE%-Expansion unterstützt. |
+| `agents.codex.sessionsDir` | `"~/.codex/sessions"` | Codex-Session-Logs zur Kontingentprüfung; Home- und Umgebungsvariablen-Expansion unterstützt. |
 | `agents.codex.preferredDomains` | `[]` | Bevorzugte Pfadpräfixe; Scheduler-Präferenz, keine Zugriffsgrenze. |
 | `agents.codex.bySize` | Objekt (siehe Unterfelder) | Überschreibungen nach Aufgabengröße (S/M/L); passende args ergänzen die Basisargumente. |
 | `agents.codex.bySize.S` | Objekt (siehe Unterfelder) | Überschreibung für kleine Aufgaben. |
@@ -408,6 +433,18 @@ Fragen und Testergebnisse und merkt Jira To Do vor; integrierte Aufgaben sind da
 kostenpflichtige Nutzung im State. `sync` wiederholt vorgemerkte Quellupdates; nach drei Fehlern
 werden sie zu Fragen. Ticketupdates nutzen kurze Agenten-MCP-Aufrufe; fehlende Agenten verzögern sie.
 
+Mit REST-Zugang laufen Jira-HTTP und die optionale Ollama-Formulierung in einem eigenen
+Worker-Thread, unabhängig von synchroner Git-/Berichtsarbeit im Haupt-Thread. Nur der
+Haupt-Thread schreibt den Projektzustand. Bis zu `source.maxConcurrency` unabhängige
+Tickets werden parallel aktualisiert. Eine verzögerte Wiederholung blockiert auch
+spätere Aktionen desselben Tickets. Bestätigte Teilschritte werden vor dem Fortsetzen
+gespeichert; ein bestätigter Kommentar wird bei einem späteren Fehler nicht erneut gesendet.
+Bei unklarem Ausgang eines Schreib-Timeouts bleibt eine Prüfung in Jira erforderlich;
+Schreibaufrufe werden nicht blind sofort wiederholt. Jira-`Retry-After` pausiert neue
+Aktionen. Bei ausgelastetem Ollama wird die Vorlage verwendet, statt Kommentare dahinter
+aufzustauen. Die Zahl der Coding-Agenten und der Agenten-/MCP-basierte Ticketimport
+werden dadurch nicht parallelisiert.
+
 ## Sicherheitsregeln
 
 - Agentenarbeit niemals nach main pushen. init installiert einen pre-push-Hook gegen Main-Pushes
@@ -422,13 +459,15 @@ werden sie zu Fragen. Ticketupdates nutzen kurze Agenten-MCP-Aufrufe; fehlende A
   Domain- und Secret-Grenzen sind Protokollregeln, keine Betriebssystem-Sandbox.
   Nur vertrauenswürdige Projekte, Konfigurationen, Aufgaben und Zusätze verwenden;
   ausführbare Programme und Argumentlisten prüfen.
-- Der Webserver bindet 127.0.0.1, prüft Host und verlangt bei jeder Anfrage ein zufälliges Token (einmal erzeugt, in `<runtimeDir>/ui-token` gespeichert).
+- Der Webserver bindet standardmäßig 127.0.0.1, prüft Host und verlangt bei jeder Anfrage ein Token. Im Direktbetrieb wird es in `<runtimeDir>/ui-token` erzeugt, Compose liest es aus einer Secret-Datei. Bindung und erlaubte Hosts sind explizit per Umgebung konfigurierbar.
   Lokal halten und die Token-URL nicht veröffentlichen.
 
 ## Grenzen
 
-Windows ist die primäre Laufzeit: Prozessbaum-Abbruch verwendet taskkill, Desktop-Codex-Suche nutzt
-Windows-Pfade. Shell-Launcher belegen keine vollständige POSIX-Unterstützung.
+Windows verwendet `taskkill /T`, Linux isolierte Prozessgruppen. Native CLI-Befehle
+(`claude`, `codex`) sind die portablen Defaults. Windows-Programmpfade in einer privaten
+Konfiguration müssen unter Linux ersetzt werden. Codex-Sessions liegen standardmäßig unter
+`~/.codex/sessions`; bei abweichendem Codex-Home `agents.codex.sessionsDir` setzen.
 Der Datei-Importer übernimmt ein angegebenes jira:false derzeit nicht; Quellaktionen für lokale
 Importaufgaben können deshalb trotzdem Jira-Updates versuchen. Diese Grenze bei Dateiaufgaben beachten.
 Der externe Ticketadapter unterstützt Jira; GitHub Issues ist geplant. Import und Ticketupdates

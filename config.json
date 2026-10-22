@@ -17,7 +17,9 @@
   "source": {
     "type": "jira",
     "cloudId": "",
-    "todoStatus": "To Do"
+    "todoStatus": "To Do",
+    "maxConcurrency": 4,
+    "requestTimeoutSeconds": 45
   },
   "worktreeRoot": "../ardai-worktrees",
   "integrationBranch": "integration",
@@ -91,7 +93,7 @@
         "-c",
         "model_reasoning_effort=\"medium\""
       ],
-      "sessionsDir": "%USERPROFILE%\\.codex\\sessions",
+      "sessionsDir": "~/.codex/sessions",
       "preferredDomains": [],
       "bySize": {
         "S": {

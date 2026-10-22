@@ -63,3 +63,43 @@ test('tokenFile resolves "~" to the home directory and everything else against t
   assert.equal(resolveTokenFile('secrets/jira', '/repo', '/home/u'), path.resolve('/repo', 'secrets/jira'));
   assert.equal(resolveTokenFile('~other/jira', '/repo', '/home/u'), path.resolve('/repo', '~other/jira'));
 });
+
+test('only reads retry a timeout; body timeouts are sanitized too', async () => {
+  for (const method of ['GET', 'POST']) {
+    let attempts = 0;
+    const client = new JiraClient({ baseUrl: 'https://example.invalid', email: 'e', token: 'fixture-secret', fetchImpl: async () => {
+      attempts++;
+      return { text: async () => { throw Object.assign(new Error('fixture-secret timeout'), { name: 'TimeoutError' }); } };
+    } });
+    await assert.rejects(client.request(method, '/api', {}), (error) => error.retryable && !error.message.includes('fixture-secret'));
+    assert.equal(attempts, method === 'GET' ? 2 : 1);
+  }
+});
+
+test('rate limiting preserves Retry-After and pauses subsequent requests', async () => {
+  let requests = 0;
+  const client = new JiraClient({ baseUrl: 'https://example.invalid', email: 'e', token: 'fixture', fetchImpl: async () => {
+    requests++;
+    return { ok: false, status: 429, headers: new Headers({ 'retry-after': '120' }), text: async () => 'slow down' };
+  } });
+  await assert.rejects(client.request('GET', '/api'), (error) => error.status === 429 && error.retryAfterMs === 120000);
+  await assert.rejects(client.request('GET', '/api'), (error) => error.status === 429 && error.retryAfterMs > 0);
+  assert.equal(requests, 1);
+});
+
+test('a retry resumes after persisted steps without posting a successful comment twice', async () => {
+  const calls = [];
+  let fail = true;
+  const client = { request: async (method, url) => {
+    calls.push([method, url]);
+    if (method === 'PUT' && fail) throw new Error('labels failed');
+  } };
+  const action = { taskId: 'DEV-1', type: 'failed', completedSteps: [] };
+  const options = { t, onProgress: (step) => { action.completedSteps.push(step); } };
+  await assert.rejects(applyAction(client, action, options), /labels failed/);
+  assert.deepEqual(action.completedSteps, ['comment']);
+  fail = false;
+  await applyAction(client, action, options);
+  assert.equal(calls.filter(([method]) => method === 'POST').length, 1);
+  assert.deepEqual(action.completedSteps, ['comment', 'labels']);
+});

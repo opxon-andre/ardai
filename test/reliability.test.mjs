@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { patchTask, followUpIdentity } from '../lib/task-edits.mjs';
@@ -14,7 +15,16 @@ const agents = { claude: {}, codex: {} };
 function fixture(t, config = {}) {
   const root = fs.mkdtempSync(new URL('.reliability-', import.meta.url));
   // Windows can retain the child's cwd briefly after its exit hook removes run.lock.
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 25 }));
+  t.after(async () => {
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(fileURLToPath(new URL('.', import.meta.url))));
+    for (let attempt = 0; ; attempt++) {
+      try { fs.rmSync(root, { recursive: true, force: true }); break; }
+      catch (error) {
+        if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error.code) || attempt >= 40) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+  });
   fs.writeFileSync(path.join(root, CONFIG_NAME), JSON.stringify({
     runtimeDir: 'runtime', agents: { claude: { enabled: false }, codex: { enabled: false } }, ...config,
   }));
@@ -360,4 +370,47 @@ test('invalid replacement code fails preparation without replacing the live proc
   fs.writeFileSync(script, 'invalid javascript syntax!');
   await assert.rejects(prepareReload({ script, args: [], cwd: f.root, logFile: path.join(f.runtime, 'reload.log'), context: {} }), /Reload failed/);
   assert.match(fs.readFileSync(path.join(f.runtime, 'reload.log'), 'utf8'), /SyntaxError/);
+});
+
+test('runner sends independent Jira tickets concurrently without losing inbox edits', async (t) => {
+  let active = 0, peak = 0, received = 0, sameTicketOverlap = false;
+  const busy = new Set();
+  const server = http.createServer((req, res) => {
+    const key = req.url.split('/issue/')[1]?.split('?')[0];
+    if (busy.has(key)) sameTicketOverlap = true;
+    busy.add(key); received++; peak = Math.max(peak, ++active);
+    setTimeout(() => {
+      busy.delete(key); active--;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ fields: { status: { name: 'In Progress' } } }));
+    }, 300);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const f = fixture(t, { tickSeconds: 0.05, jiraBaseUrl: `http://127.0.0.1:${server.address().port}`,
+    source: { jiraEmail: 'test@example.invalid', maxConcurrency: 2, requestTimeoutSeconds: 2 }, ollama: { enabled: false },
+  });
+  initGit(f.root);
+  f.state.sourceActions = ['DEV-1', 'DEV-1', 'DEV-2', 'DEV-3'].map((taskId, i) => ({ id: `a${i}`, taskId, type: 'started', tries: 0 }));
+  f.write();
+  const env = { ...process.env, ARDAI_JIRA_TOKEN: 'fixture-token' };
+  delete env.ORCHESTRATOR_CONFIG;
+  delete env.ARDAI_JIRA_TOKEN_FILE;
+  const child = spawn(process.execPath, [cli, 'run', '--no-ui'], { cwd: f.root, env, windowsHide: true });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  try {
+    await until(() => received > 0, 'Jira worker did not send requests: ' + output);
+    success(run(f.root, 'patch', 'ARDAI-A1', '--note', 'while Jira is busy'));
+    await until(() => f.read().tasks[0].lastNote === 'while Jira is busy' && !f.read().sourceActions?.length, 'Queue did not drain or inbox edit was lost: ' + output);
+    assert.equal(received, 4);
+    assert.equal(peak, 2);
+    assert.equal(sameTicketOverlap, false);
+    success(run(f.root, 'stop'));
+    await until(() => child.exitCode !== null, 'Runner did not stop');
+  } finally {
+    child.kill();
+    await until(() => child.exitCode !== null || child.signalCode !== null, 'Runner did not exit');
+    server.closeAllConnections(); server.close();
+  }
 });

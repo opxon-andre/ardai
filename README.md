@@ -12,7 +12,13 @@ The standalone project is [ardai](https://github.com/opxon-andre/ardai).
 
 ## Installation
 
+Run directly with Node/npm as described below, or use the container with bind mounts,
+file-based secrets and access to the host Docker daemon. See the [container guide](CONTAINER.md)
+for setup. Both modes default to `127.0.0.1:4711`; environment variables can override it.
+
 Use Node.js **24 or newer**, Git, and authenticated Claude Code and/or Codex CLIs.
+Windows and Linux are supported. On Linux, install the native CLIs and Git in the
+same environment as Node (also when using WSL).
 For Jira work, configure the agent's Atlassian MCP access; the orchestrator holds no Jira credentials.
 Docker/Playwright are needed only for tasks that require them. No npm dependencies are required.
 
@@ -22,10 +28,27 @@ From the ardai repository root:
 node orchestrator.mjs install-cli
 ```
 
-This installs shell and .cmd launchers for the effective CLI and its configured aliases into the user's .local/bin.
+This installs executable shell launchers for the effective CLI and its configured aliases into the user's `.local/bin`.
+On Windows, `.cmd` launchers are installed as well.
 Add that directory to PATH if the installer reports it missing. An optional directory argument changes
 the install location. Launchers reference this checkout: keep it available. Alternatively invoke
 `node /absolute/path/to/orchestrator.mjs <command>` from the target project.
+
+On Linux, add the directory to your shell profile if needed:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+ardai --help
+```
+
+The UI opens through `xdg-open` on Linux desktops (package `xdg-utils`). On a
+headless server, use `ardai serve --no-open` and the printed URL. For a remote
+server, forward the local UI port with `ssh -L 4711:127.0.0.1:4711 user@server`
+and open the printed token URL locally. The server remains bound to loopback.
+Stopping tasks and timeouts terminate the agent's POSIX process group, including
+ordinary shell/test children. Programs that deliberately detach into another session
+and Docker containers need their own cleanup. `SIGTERM` releases the runner lock,
+just like Ctrl+C; use `ardai stop` to also stop the agents and save their work.
 
 ## Quickstart
 
@@ -268,6 +291,8 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `source` | object (see child fields) | Ticket source settings; Jira is the supported external source. |
 | `source.type` | `"jira"` | External source adapter: jira. |
 | `source.cloudId` | `""` | Atlassian cloud ID supplied to agent MCP prompts; set per project. |
+| `source.maxConcurrency` | `4` | Simultaneous REST ticket actions (1–32); actions within one ticket remain ordered. MCP fallback remains sequential. |
+| `source.requestTimeoutSeconds` | `45` | Deadline for each HTTP request including its response body (1–300 seconds). |
 | `source.todoStatus` | `"To Do"` | Jira status used by clean. |
 | `worktreeRoot` | `"../ardai-worktrees"` | Worktree parent directory, resolved from project root. |
 | `integrationBranch` | `"integration"` | Automatic merge target; must differ from main for safe operation. |
@@ -312,7 +337,7 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `agents.codex.command` | `"codex"` | CLI executable; environment placeholders are expanded. Codex may prefer the desktop app executable on Windows. |
 | `agents.codex.fallbackCommand` | `"codex"` | Executable fallback if desktop Codex cannot be found. |
 | `agents.codex.args` | `["exec","--json","--dangerously-bypass-approvals-and-sandbox","-c","model=\"gpt-6.1-sol\"","-c","model_reasoning_effort=\"medium\""]` | Base CLI argument array, passed verbatim; inspect permission-bypass flags before use. |
-| `agents.codex.sessionsDir` | `"%USERPROFILE%\\.codex\\sessions"` | Codex session logs used for quota tracking; %VARIABLE% expansion supported. |
+| `agents.codex.sessionsDir` | `"~/.codex/sessions"` | Codex session logs used for quota tracking; home and environment variable expansion supported. |
 | `agents.codex.preferredDomains` | `[]` | Preferred path prefixes; scheduling preference, not an access boundary. |
 | `agents.codex.bySize` | object (see child fields) | Task-size overrides (S/M/L); matching args are appended to base args. |
 | `agents.codex.bySize.S` | object (see child fields) | Override for small tasks. |
@@ -408,6 +433,17 @@ task questions/results, and queues Jira To Do; integrated tasks cannot be cleane
 usage permission in state. `sync` retries queued source updates; after three failures they become questions.
 Ticket updates use short agent MCP calls; unavailable agents delay them.
 
+With REST credentials, Jira HTTP requests and optional Ollama wording run in a dedicated
+worker thread, independently of synchronous Git/report work in the main thread. The
+main thread remains the only writer of project state. Up to `source.maxConcurrency`
+independent tickets are updated concurrently; a delayed retry also holds back later
+actions on that ticket. Confirmed steps are persisted before continuing, so an already
+confirmed comment is skipped when a later step is retried. An ambiguous write timeout
+can still require checking Jira; write requests are not immediately repeated blindly.
+Jira `Retry-After` pauses new dispatch. A busy Ollama model uses the template rather
+than holding subsequent comments in a model queue. This does not increase the number
+of coding agents or parallelize the agent/MCP-based ticket importer.
+
 ## Security rules
 
 - Never push agent work to main. init installs a pre-push hook blocking main pushes from configured
@@ -420,13 +456,15 @@ Ticket updates use short agent MCP calls; unavailable agents delay them.
 - Agents run with permission/sandbox bypass flags by default. Domain restrictions and secret bans
   are protocol rules, not an operating-system sandbox. Use only trusted projects, configuration,
   task inputs and protocol addenda; inspect executable commands and argument arrays.
-- The web server binds 127.0.0.1, validates Host and requires a random token (created once, stored in `<runtimeDir>/ui-token`) on every request.
+- The web server defaults to 127.0.0.1, validates Host and requires a token on every request. Native mode creates it in `<runtimeDir>/ui-token`; Compose reads it from a secret file. Explicit environment configuration can change the bind address and allowed Hosts.
   Keep it local and do not publish the token URL.
 
 ## Limits
 
-Windows is the primary runtime: process-tree termination uses taskkill and desktop Codex discovery
-uses Windows paths. Shell launchers exist, but that does not establish full POSIX support.
+Windows uses `taskkill /T`; Linux uses isolated process groups. Native CLI commands
+(`claude`, `codex`) are the portable default. Windows executable paths in a private
+configuration must be replaced on Linux. Codex sessions default to `~/.codex/sessions`;
+set `agents.codex.sessionsDir` if you use a different Codex home directory.
 The current file importer does not preserve a supplied jira:false flag; source actions for imported
 local tasks may still attempt Jira updates. Use local task files with that limitation in mind.
 The external ticket adapter supports Jira; GitHub Issues is planned. Import and ticket updates depend

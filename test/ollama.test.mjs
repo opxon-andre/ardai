@@ -35,6 +35,7 @@ test('polisher handles one request at a time', async () => {
     return { ok: true, json: async () => ({ message: { content: 'task/T-1 3 von 5' } }) };
   };
   const polish = createPolisher({ enabled: true }, { fetchImpl });
-  await Promise.all([polish(action), polish(action), polish(action)]);
+  const results = await Promise.all([polish(action), polish(action), polish(action)]);
   assert.equal(peak, 1);
+  assert.equal(results.filter((r) => r === null).length, 2, 'busy model falls back to templates instead of blocking the ticket queue');
 });

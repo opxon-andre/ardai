@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Orchestrator für Claude + Codex. Läuft ohne KI und damit unabhängig vom
 // Kontingent der Agenten. Bedienung: siehe README.md in diesem Ordner.
+import { mergeNewSecrets } from './lib/secrets.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readJson, nowIso, log, expandEnv, sh } from './lib/util.mjs';
 import { Git, renderPrePushHook } from './lib/git.mjs';
@@ -12,10 +14,13 @@ import { taskPrompt, resumePrompt, importPrompt } from './lib/prompts.mjs';
 import { spawn } from 'node:child_process';
 import { renderReport, buildReportHtml } from './lib/report.mjs';
 import { runSourceAction, killTree, isAlive } from './lib/sources.mjs';
-import { createPolisher } from './lib/ollama.mjs';
-import { JiraClient, loadJiraAuth, applyAction, REST_ACTIONS } from './lib/jira.mjs';
+import { loadJiraAuth, REST_ACTIONS } from './lib/jira.mjs';
+import { JiraExecutor } from './lib/jira-executor.mjs';
+import { SourceActionQueue } from './lib/source-queue.mjs';
 import { startServer } from './lib/server.mjs';
 import { receiveReload, prepareReload } from './lib/reload.mjs';
+import { openBrowser, cliLaunchers } from './lib/platform.mjs';
+import { loadEnvironment, uiEnvironment } from './lib/environment.mjs';
 import { makeT } from './lib/i18n.mjs';
 import { planPhaseTests } from './lib/phasetests.mjs';
 import { RUNNABLE, depsDone as dependenciesDone, selectTask as selectPlannedTask } from './lib/planning.mjs';
@@ -33,6 +38,7 @@ function printActivity(agent, taskId, a) {
   console.log(`${t} ${agent}/${taskId} ${ACTIVITY_MARK[a.kind] || '•'} ${a.text}`);
 }
 
+try { loadEnvironment(); } catch (err) { console.error(err.message); process.exit(1); }
 const [cmd, ...args] = process.argv.slice(2);
 if (!cmd || ['help', '--help', '-h'].includes(cmd)) {
   let brand = loadToolBrand();
@@ -68,6 +74,7 @@ const DONE = 'done';
 let state;
 try { state = loadState(stateFile); }
 catch (err) { console.error(err.message); process.exit(1); }
+for (const action of state.sourceActions || []) { action.id ||= crypto.randomUUID(); delete action.sending; }
 for (const name of Object.keys(config.agents)) state.agents[name] ||= {};
 
 const verbose = process.argv.includes('--verbose') || process.argv.includes('-v');
@@ -81,9 +88,13 @@ function liveActivity(n = 40) {
   }).filter(Boolean);
 }
 
-function save() {
+function persistState() {
   if (!isRunner && runnerAlive()) throw new Error('State owned by runner / State gehört dem Runner; Inbox verwenden.');
   saveState(stateFile, state);
+}
+
+function save() {
+  persistState();
   try { fs.writeFileSync(hintsFile, hintsMarkdown(state, brand), 'utf8'); } catch (err) { log('hints.md nicht geschrieben:', err.message); }
   try { renderLiveReport(); } catch (err) { log('Statusseite nicht geschrieben:', err.message); }
 }
@@ -178,7 +189,7 @@ function block(name, untilMs, reason) {
 // ---------------------------------------------------------------- Auswahl
 
 function selectTask(agent) {
-  return selectPlannedTask(agent, state.tasks, config.agents, { inScope, isAvailable, busyAgents: new Set(activeRuns.keys()), stealWhenBusy: config.scheduling?.stealWhenBusy !== false, softDomains: config.scheduling?.softDomains || [] });
+  return selectPlannedTask(agent, state.tasks, config.agents, { inScope, isAvailable, busyAgents: new Set(activeRuns.keys()), stealWhenBusy: config.scheduling?.stealWhenBusy !== false, softDomains: config.scheduling?.softDomains || [], phaseTestsLockDomains: config.scheduling?.phaseTestsLockDomains !== false });
 }
 
 // ---------------------------------------------------------------- Ausführung
@@ -213,7 +224,7 @@ function startTask(agent, task) {
   const secretsProvided = isPhaseTest && provideLocalSecrets(wt);
   const prompt = resume
     ? resumePrompt(task, protocolAddendum(repoRoot, brand, config.protocolAddendum), brand.cli)
-    : taskPrompt({ task, agent, otherTasks: running(), takeover, answers, contextDocs: config.contextDocs || [], cli: brand.cli, jiraCloudId: config.source?.cloudId || '', jiraManaged: Boolean(jiraRest()), priorResults, secretsProvided, localSecrets: config.phaseTestLocalSecrets, composeProject: config.phaseTestComposeProject, protocolAddendum: protocolAddendum(repoRoot, brand, config.protocolAddendum) });
+    : taskPrompt({ phaseTestBudgetMinutes: config.phaseTests?.maxRunMinutes || null, task, agent, otherTasks: running(), takeover, answers, contextDocs: config.contextDocs || [], cli: brand.cli, jiraCloudId: config.source?.cloudId || '', jiraManaged: Boolean(jiraRest()), priorResults, secretsProvided, localSecrets: config.phaseTestLocalSecrets, composeProject: config.phaseTestComposeProject, protocolAddendum: protocolAddendum(repoRoot, brand, config.protocolAddendum) });
 
   // Kleine Aufgaben laufen mit einem schnelleren Modell bzw. weniger Reasoning (config: agents.<name>.bySize)
   const sizeArgs = config.agents[agent].bySize?.[task.size]?.args || [];
@@ -235,7 +246,7 @@ function startTask(agent, task) {
     prompt,
     resumeSessionId: resume ? task.sessions[agent] : null,
     logFile: path.join(runtimeDir, 'logs', `${task.id}-${agent}-${Date.now()}.jsonl`),
-    maxRunMinutes: config.maxRunMinutes,
+    maxRunMinutes: runLimitMinutes(task),
     codeGraph: config.codeGraph,
     extraArgs: sizeArgs,
     onEvent: (line) => {
@@ -266,10 +277,18 @@ function refreshCodeGraph(wt) {
 }
 
 // Copy only the configured, git-ignored local test secrets for phase tests.
+// Quelle der lokalen Test-Secrets: standardmäßig das Projektverzeichnis, optional ein anderes Verzeichnis
+// (config phaseTestLocalSecretsSource, relativ zum Projekt oder absolut), z. B. der Worktree, aus dem der lokale Stack gebaut wird.
+function localSecretsSource() {
+  const rel = config.phaseTestLocalSecrets;
+  if (!rel) return null;
+  return config.phaseTestLocalSecretsSource ? path.resolve(repoRoot, config.phaseTestLocalSecretsSource) : path.join(repoRoot, rel);
+}
+
 function provideLocalSecrets(wt) {
   const rel = config.phaseTestLocalSecrets;
   if (!rel) return false;
-  const src = path.join(repoRoot, rel);
+  const src = localSecretsSource();
   if (!fs.existsSync(src)) { log(`Lokale Test-Secrets fehlen (${src}), Phasentest läuft ohne.`); return false; }
   const ignored = sh('git', ['-C', wt, 'check-ignore', '-q', path.join(rel, 'probe.txt')], { check: false }).code === 0;
   if (!ignored) { log(`${rel} ist im Worktree nicht per .gitignore ausgeschlossen – Secrets werden NICHT kopiert.`); return false; }
@@ -277,8 +296,17 @@ function provideLocalSecrets(wt) {
   return true;
 }
 
+// Der lokale Stack-Start erzeugt fehlende Dev-Secrets. Entstehen sie im Worktree-Exemplar, würden sie mit dem Worktree
+// verworfen, und der nächste Start erzeugt andere Werte: Dienste hätten dann verschiedene Schlüssel (401 invalid_token).
+// Deshalb neue Dateien (nie vorhandene überschreiben) zurück in die Quelle übernehmen.
 function removeLocalSecrets(wt) {
-  if (config.phaseTestLocalSecrets) fs.rmSync(path.join(wt, config.phaseTestLocalSecrets), { recursive: true, force: true });
+  if (!config.phaseTestLocalSecrets) return;
+  const copy = path.join(wt, config.phaseTestLocalSecrets);
+  try {
+    const added = mergeNewSecrets(copy, localSecretsSource());
+    if (added) log(`${added} neue lokale Secret-Datei(en) aus dem Phasentest in die Quelle übernommen.`);
+  } catch (err) { log('Secrets zurückübernehmen fehlgeschlagen:', err.message); }
+  fs.rmSync(copy, { recursive: true, force: true });
 }
 
 function readResult(wt) {
@@ -328,6 +356,11 @@ function finishTask(agent, task, wt, outcome) {
     task.status = 'interrupted';
     task.attempts = Math.max(0, task.attempts - 1); // Outage zählt nicht als Fehlversuch
     addNote(task, `Token-Outage bei ${agent}, gesperrt bis ${new Date(until).toLocaleString('de-DE')}`);
+  } else if (outcome.timedOut && task.type === 'phase-test' && config.phaseTests?.maxRunMinutes) {
+    // Zeitbudget eines Phasentests ist hart: kein endloses Wiederaufnehmen, der Stand steht auf dem Branch.
+    release('Timeout');
+    task.attempts = Math.max(task.attempts || 0, config.maxAttempts);
+    retryOrFail(task, `Zeitbudget von ${config.phaseTests.maxRunMinutes} min für Phasentests überschritten`);
   } else if (outcome.timedOut) {
     release('Timeout');
     task.status = 'interrupted';
@@ -369,6 +402,10 @@ function finishTask(agent, task, wt, outcome) {
   if (result?.tests?.length) log(`Testbericht: ${link(writeResultsSnapshot())}`);
 }
 
+function runLimitMinutes(task) {
+  return task.type === 'phase-test' && config.phaseTests?.maxRunMinutes ? config.phaseTests.maxRunMinutes : config.maxRunMinutes;
+}
+
 function retryOrFail(task, reason) {
   if (task.attempts >= config.maxAttempts) {
     task.status = 'failed';
@@ -407,7 +444,7 @@ function refreshArchive() {
 // Wenn alle Umsetzungsaufgaben eines Epics fertig sind, folgt der gebündelte
 // Playwright-/Container-Test als eigene Aufgabe.
 function ensurePhaseTests() {
-  for (const phaseTest of planPhaseTests(state.tasks, { skipEpics: config.phaseTests?.skipEpics, doneStatus: DONE })) {
+  for (const phaseTest of planPhaseTests(state.tasks, { skipEpics: config.phaseTests?.skipEpics, runtimeDomains: config.phaseTests?.runtimeDomains, doneStatus: DONE })) {
     state.tasks.push(phaseTest);
     log(`Phasentest ${phaseTest.id} eingeplant`);
   }
@@ -448,9 +485,9 @@ async function processInbox() {
 }
 
 function reloadState() {
-  if (sourceBusy || flushing) return; // laufende Ticket-Aktualisierung nicht unter den Füßen wegziehen
+  if (sourceQueue.size || flushing) return; // laufende Ticket-Aktualisierung nicht unter den Füßen wegziehen
   state = loadState(stateFile);
-  for (const a of state.sourceActions || []) a.id ||= `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  for (const a of state.sourceActions || []) { a.id ||= crypto.randomUUID(); delete a.sending; }
   for (const name of Object.keys(config.agents)) state.agents[name] ||= {};
 }
 
@@ -747,13 +784,13 @@ let jiraClientCache;
 function jiraRest() {
   if (jiraClientCache === undefined) {
     const auth = config.source ? loadJiraAuth({ config, repoRoot }) : null;
-    jiraClientCache = auth ? new JiraClient(auth) : null;
+    jiraClientCache = auth ? new JiraExecutor({
+      auth: { ...auth, timeoutMs: config.source.requestTimeoutSeconds * 1000 },
+      src: config.source, ollama: config.ollama, language: config.language, brand,
+    }) : null;
   }
   return jiraClientCache;
 }
-
-let polisherCache;
-const polisher = () => (polisherCache === undefined ? (polisherCache = createPolisher(config.ollama)) : polisherCache);
 
 const REST_ONLY = new Set(['started', 'review', 'failed']);
 
@@ -768,34 +805,51 @@ function queueSourceAction(task, type, extra = {}) {
   log(t('source.pending', { task: task.id, action: type }));
 }
 
-let sourceBusy = false;
+const sourceQueue = new SourceActionQueue({
+  actions: () => state.sourceActions || [],
+  execute: executeSourceAction,
+  concurrency: () => jiraRest() ? config.source.maxConcurrency : 1,
+  canRun: () => (isRunner || (!runnerAlive() && Date.now() - runnerSpawnedAt >= 20_000))
+    && (flushing > 0 ? Date.now() < sourceFlushDeadline : (!reloadRequested && !shutdownRequested))
+    && (!state.sourceRetryAt || new Date(state.sourceRetryAt).getTime() <= Date.now())
+    && (jiraRest() || Object.keys(config.agents).some((name) => config.agents[name].enabled && isAvailable(name))),
+  onError: (error) => log('Ticket-Aktualisierung:', error.message),
+  onSettled: () => wake(),
+});
 // Jede Aktion hat eine feste ID; Änderungen werden immer am aktuellen State
 // vorgenommen (der kann zwischenzeitlich von der Platte neu geladen worden sein).
 const findAction = (id) => (state.sourceActions || []).find((a) => a.id === id);
 const dropAction = (id) => { state.sourceActions = (state.sourceActions || []).filter((a) => a.id !== id); };
 
 async function processSourceActions() {
-  if (sourceBusy) return false;
-  // Ein laufender (oder gerade gestarteter) ardai ist allein zuständig
-  if (!isRunner && (runnerAlive() || Date.now() - runnerSpawnedAt < 20_000)) return false;
-  const next = (state.sourceActions || []).find((a) => !a.retryAt || new Date(a.retryAt).getTime() <= Date.now());
-  if (!next) return false;
+  const results = await Promise.all(sourceQueue.pump());
+  return results.some(Boolean);
+}
+
+async function executeSourceAction(next) {
   const rest = jiraRest();
   const agent = rest ? null : Object.keys(config.agents).find((n) => config.agents[n].enabled && isAvailable(n));
   if (!rest && !agent) return false;
-  sourceBusy = true;
+  next.sending = true;
   const { id, taskId, type } = next;
   try {
     let r;
     if (rest && REST_ACTIONS.has(type)) {
       try {
-        await applyAction(rest, next, { src: config.source, t: (k, v) => t(k, v), polish: polisher() });
+        await rest.apply(next, (step) => {
+          const current = findAction(id);
+          if (!current) throw new Error(`Ticket action disappeared: ${id}`);
+          current.completedSteps = [...new Set([...(current.completedSteps || []), step])];
+          // Acknowledge each step only once the state owner has persisted it.
+          persistState();
+        });
         r = { ok: true };
       } catch (err) {
-        r = { ok: false, error: err.message };
+        r = { ok: false, error: err.message, retryAfterMs: err.retryAfterMs, status: err.status };
       }
     } else if (agent) {
-      r = await runSourceAction(next, { src: config.source, t, agent, agentCfg: agentCfgFor(agent), runtimeDir });
+      try { r = await runSourceAction(next, { src: config.source, t, agent, agentCfg: agentCfgFor(agent), runtimeDir }); }
+      catch (err) { r = { ok: false, error: err.message }; }
     } else {
       r = { ok: false, error: 'kein Agent frei' };
     }
@@ -806,7 +860,8 @@ async function processSourceActions() {
       const cur = findAction(id) || next;
       cur.tries = (cur.tries || 0) + 1;
       cur.lastError = r.error;
-      cur.retryAt = new Date(Date.now() + 2 ** cur.tries * 60_000).toISOString(); // 2, 4 min …
+      cur.retryAt = new Date(Date.now() + Math.max(2 ** cur.tries * 60_000, r.retryAfterMs || 0)).toISOString(); // honor Jira Retry-After
+      if (r.status === 429) state.sourceRetryAt = new Date(Math.max(new Date(state.sourceRetryAt || 0).getTime(), Date.now() + Math.max(1000, r.retryAfterMs || 60_000))).toISOString();
       log(t('source.failed', { task: taskId, action: type, error: r.error }));
       if (r.outage && agent) block(agent, r.resetsAt || Date.now() + config.fallbackBackoffMinutes * 60_000, 'Outage bei Ticket-Aktualisierung');
       if (cur.tries >= 3) {
@@ -818,28 +873,35 @@ async function processSourceActions() {
         });
       }
     }
+    const current = findAction(id);
+    if (current) delete current.sending;
     save();
     return r.ok;
   } finally {
-    sourceBusy = false;
+    const current = findAction(id);
+    if (current) delete current.sending;
   }
 }
 
 // Alle fälligen Ticket-Aktualisierungen senden (z. B. vor dem Beenden).
-// Wartet, falls gerade eine im Hintergrund läuft; höchstens 5 Minuten.
+// Start new actions for at most five minutes, then finish already dispatched work.
 let flushing = 0;
+let sourceFlushDeadline = Infinity;
 async function flushSourceActions() {
+  if (!flushing) sourceFlushDeadline = Date.now() + 5 * 60_000;
   flushing += 1;
   try {
-    const deadline = Date.now() + 5 * 60_000;
+    const deadline = sourceFlushDeadline;
     while ((state.sourceActions || []).length && Date.now() < deadline) {
-      if (sourceBusy) { await new Promise((r) => setTimeout(r, 500)); continue; }
+      if (sourceQueue.size) { await new Promise((r) => setTimeout(r, 100)); continue; }
       const before = state.sourceActions.length;
       const ok = await processSourceActions();
-      if (!ok && state.sourceActions.length === before) break; // kein Agent frei, nichts fällig oder ardai läuft
+      if (!ok && state.sourceActions.length === before && !sourceQueue.size) break; // no due work or owner unavailable
     }
+    await Promise.allSettled([...sourceQueue.jobs.values()].map((job) => job.promise));
   } finally {
     flushing -= 1;
+    if (!flushing) sourceFlushDeadline = Infinity;
   }
 }
 
@@ -943,7 +1005,9 @@ async function cmdRun(args, { source = null } = {}) {
   fs.writeFileSync(lockFile, String(process.pid));
   const cleanup = () => { try { fs.rmSync(lockFile); } catch { /* egal */ } };
   process.on('exit', cleanup);
-  process.on('SIGINT', () => { log(`Beende (laufende Agenten laufen weiter; "${brand.cli} stop" beendet sie, ein Neustart setzt sie fort)`); process.exit(0); });
+  const onSignal = () => { log(`Beende (laufende Agenten laufen weiter; "${brand.cli} stop" beendet sie, ein Neustart setzt sie fort)`); process.exit(0); };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
   // Nach einem Neustart des Orchestrators sind vorher laufende Aufgaben verwaist:
   // noch lebende Agenten beenden, die Aufgabe wird per Resume fortgesetzt.
@@ -998,7 +1062,7 @@ async function cmdRun(args, { source = null } = {}) {
     if (shutdownRequested) reloadRequested = false;
     if (reloadRequested) {
       // Drain current work; no new agents, imports or source actions until handoff.
-      if (!activeRuns.size && !sourceBusy && !flushing) {
+      if (!activeRuns.size && !sourceQueue.size && !flushing) {
         try {
           save();
           const restart = await prepareUiReload({ runner: true, source, scope: scope ? [...scope] : null });
@@ -1113,13 +1177,17 @@ function prepareUiReload(context = {}) {
   return prepareReload({
     script: fileURLToPath(import.meta.url), args: [cmd, ...args.filter((arg) => arg !== '--open'), ...(cmd === 'serve' ? ['--no-open'] : [])],
     cwd: process.cwd(), logFile: path.join(runtimeDir, 'reload.log'),
-    context: { ...context, port: uiPort },
+    context: { ...context, port: uiPort, configuredPort: uiEnvironment(config.ui).port },
     onError: (err) => { reloadRequested = false; log(t('reload.failed'), err.message); },
   });
 }
 
 // Stable address: the token is created once and kept in the runtime directory, so bookmarks survive restarts.
 function uiToken() {
+  if (process.env.ARDAI_UI_TOKEN) {
+    if (!/^[A-Za-z0-9_-]{20,}$/.test(process.env.ARDAI_UI_TOKEN)) throw new Error('ARDAI_UI_TOKEN: expected at least 20 URL-safe characters');
+    return process.env.ARDAI_UI_TOKEN;
+  }
   const file = path.join(runtimeDir, 'ui-token');
   try {
     const stored = fs.readFileSync(file, 'utf8').trim();
@@ -1132,8 +1200,10 @@ function uiToken() {
 }
 
 async function startUi({ open = false } = {}) {
+  const uiSettings = uiEnvironment(config.ui);
   const ui = await startServer({
-    port: reloadContext?.port || config.ui?.port || 4711,
+    ...uiSettings,
+    port: reloadContext?.configuredPort === uiSettings.port && reloadContext.port ? reloadContext.port : uiSettings.port,
     token: uiToken(),
     t,
     log,
@@ -1172,7 +1242,7 @@ async function startUi({ open = false } = {}) {
   });
   uiPort = ui.port;
   log(t('serve.url', { url: ui.url }));
-  if (open) spawn('cmd.exe', ['/c', 'start', '""', ui.url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  if (open) openBrowser(ui.url, { onError: (error) => log('Browser:', error.message, ui.url) });
   return ui;
 }
 
@@ -1328,19 +1398,19 @@ function cmdInit() {
   console.log(`Init fertig: Hook installiert, Branch ${config.integrationBranch}, Worktrees unter ${git.worktreeRoot}`);
 }
 
-// Legt den Befehl "ardai" in einem PATH-Verzeichnis an (für PowerShell/cmd
-// und Git Bash), damit der Orchestrator aus jedem Verzeichnis aufrufbar ist.
+// Install platform launchers so ardai works from any project directory.
 function cmdInstallCli([dir], brand = DEFAULT_BRAND) {
-  const target = dir || path.join(process.env.USERPROFILE || process.env.HOME, '.local', 'bin');
+  const target = dir || path.join(os.homedir(), '.local', 'bin');
   const script = fileURLToPath(import.meta.url);
   fs.mkdirSync(target, { recursive: true });
   for (const name of cliNames(brand)) {
-    fs.writeFileSync(path.join(target, `${name}.cmd`), `@echo off\r\nnode "${script}" %*\r\n`);
-    const shell = path.join(target, name);
-    fs.writeFileSync(shell, `#!/bin/sh\nexec node "${script.split(path.sep).join('/')}" "$@"\n`);
-    fs.chmodSync(shell, 0o755);
+    for (const [suffix, content] of Object.entries(cliLaunchers(script))) {
+      const launcher = path.join(target, name + suffix);
+      fs.writeFileSync(launcher, content);
+      if (!suffix) fs.chmodSync(launcher, 0o755);
+    }
   }
-  const norm = (p) => path.resolve(p).toLowerCase();
+  const norm = (p) => process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p);
   const onPath = (process.env.PATH || '').split(path.delimiter).filter(Boolean).some((p) => norm(p) === norm(target));
   console.log(`${brand.cli} installiert in ${target}${onPath ? '' : ' – ACHTUNG: Verzeichnis liegt nicht im PATH'}`);
 }

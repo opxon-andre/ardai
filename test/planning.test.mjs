@@ -90,3 +90,16 @@ test('soft domains do not serialize tasks that only overlap in append-only areas
   assert.equal(selectTask('codex', [running, softOnly], agents, { softDomains: soft })?.id, 'C');
   assert.equal(selectTask('codex', [running, sameHard], agents, { softDomains: soft }), null, 'a real overlap still serializes');
 });
+
+test('phase tests lock no code areas when phaseTestsLockDomains is false, docker still serializes', () => {
+  const agents = { claude: { enabled: true }, codex: { enabled: true } };
+  const phase = { id: 'P', type: 'phase-test', status: 'running', domain: ['testing/', 'Backend/Gateway/'], resources: ['docker'], dependsOn: [] };
+  const impl = { id: 'I', status: 'ready', domain: ['Backend/Gateway/core/'], dependsOn: [] };
+  const dockerImpl = { id: 'D', status: 'ready', domain: ['Backend/Streamer/'], resources: ['docker'], dependsOn: [] };
+  assert.equal(selectTask('codex', [phase, impl], agents, {}), null, 'default keeps the old behaviour');
+  assert.equal(selectTask('codex', [phase, impl], agents, { phaseTestsLockDomains: false })?.id, 'I');
+  assert.equal(selectTask('codex', [phase, dockerImpl], agents, { phaseTestsLockDomains: false }), null, 'docker resource still serializes');
+  const runningImpl = { id: 'R', status: 'running', domain: ['Backend/Gateway/'], dependsOn: [] };
+  const readyPhase = { id: 'P2', type: 'phase-test', status: 'ready', domain: ['Backend/Gateway/'], resources: ['docker'], dependsOn: [] };
+  assert.equal(selectTask('codex', [runningImpl, readyPhase], agents, { phaseTestsLockDomains: false })?.id, 'P2');
+});

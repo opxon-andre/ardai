@@ -133,13 +133,21 @@ test('installer creates identical executable wrappers for CLI and all aliases', 
     const install = run(root, 'install-cli', target);
     assert.equal(install.status, 0, install.stderr);
     const expected = resolveBrand(brand);
-    for (const suffix of ['', '.cmd']) {
+    for (const suffix of process.platform === 'win32' ? ['', '.cmd'] : ['']) {
       const content = fs.readFileSync(path.join(target, `${expected.cli}${suffix}`), 'utf8');
       for (const alias of expected.aliases) assert.equal(fs.readFileSync(path.join(target, alias + suffix), 'utf8'), content);
     }
     if (process.platform === 'win32') {
       for (const name of [expected.cli, ...expected.aliases]) {
         const r = spawnSync('cmd.exe', ['/d', '/s', '/c', `""${path.join(target, name + '.cmd')}" --help"`], { cwd: root, encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: true });
+        assert.equal(r.status, 0, r.stderr);
+        assert.match(r.stdout, /Orchestrator/);
+      }
+    } else {
+      for (const name of [expected.cli, ...expected.aliases]) {
+        const launcher = path.join(target, name);
+        assert.ok(fs.statSync(launcher).mode & 0o111);
+        const r = spawnSync(launcher, ['--help'], { cwd: root, encoding: 'utf8' });
         assert.equal(r.status, 0, r.stderr);
         assert.match(r.stdout, /Orchestrator/);
       }
@@ -201,7 +209,7 @@ test('tool branding drives help and launchers without a project', (t) => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /demo-tool/);
   }
-  for (const name of ['demo-tool', 'demo-alias']) assert.ok(fs.existsSync(path.join(root, 'bin', name + '.cmd')));
+  for (const name of ['demo-tool', 'demo-alias']) assert.ok(fs.existsSync(path.join(root, 'bin', name + (process.platform === 'win32' ? '.cmd' : ''))));
 });
 
 test('legacy lists validate entries and internal senders are filtered in reports', () => {

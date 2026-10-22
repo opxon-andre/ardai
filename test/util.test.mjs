@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { readJson, writeJsonAtomic, expandEnv, pathsOverlap, sh } from '../lib/util.mjs';
 
@@ -81,6 +82,10 @@ test('domain overlap normalizes Windows paths, wildcards and global domains', ()
 test('environment expansion preserves unknown variables; shell helper reports local failures', (t) => {
   t.mock.property(process, 'env', { ...process.env, ARDAI_A5_TEST_VALUE: 'fixture' });
   assert.equal(expandEnv('%ARDAI_A5_TEST_VALUE%/%ARDAI_A5_UNKNOWN%'), 'fixture/%ARDAI_A5_UNKNOWN%');
+  assert.equal(expandEnv('$ARDAI_A5_TEST_VALUE/${ARDAI_A5_TEST_VALUE}/$ARDAI_A5_UNKNOWN/${ARDAI_A5_UNKNOWN}'), 'fixture/fixture/$ARDAI_A5_UNKNOWN/${ARDAI_A5_UNKNOWN}');
+  assert.equal(expandEnv('~/.codex/sessions'), path.join(os.homedir(), '.codex/sessions'));
+  assert.equal(expandEnv('~'), os.homedir());
+  assert.equal(expandEnv('~another/file'), '~another/file');
   assert.deepEqual(sh(process.execPath, ['-e', 'console.log(" ok ")']), { code: 0, stdout: 'ok', stderr: '' });
   const args = ['-e', 'console.error("failed"); process.exit(7)'];
   assert.throws(() => sh(process.execPath, args), (e) => e.result.code === 7 && e.result.stderr === 'failed');

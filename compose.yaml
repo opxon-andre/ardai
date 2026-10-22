@@ -1,0 +1,54 @@
+services:
+  ardai:
+    image: ardai:local
+    build:
+      context: .
+      args:
+        CODEX_VERSION: ${CODEX_VERSION:-latest}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    user: "${ARDAI_UID:-1000}:${ARDAI_GID:-1000}"
+    group_add:
+      - "${DOCKER_GID:-0}"
+    working_dir: ${ARDAI_PROJECT_DIR:?Set ARDAI_PROJECT_DIR to the absolute project path}
+    environment:
+      ARDAI_UI_HOST: ${ARDAI_UI_HOST:-127.0.0.1}
+      ARDAI_UI_PORT: ${ARDAI_UI_PORT:-4711}
+      ARDAI_UI_ALLOWED_HOSTS: ${ARDAI_UI_ALLOWED_HOSTS:-}
+      ARDAI_UI_TOKEN_FILE: ${ARDAI_UI_TOKEN_FILE:-/run/secrets/ui_token}
+      CODEX_API_KEY_FILE: ${CODEX_API_KEY_FILE:-}
+      ANTHROPIC_API_KEY_FILE: ${ANTHROPIC_API_KEY_FILE:-}
+      CLAUDE_CODE_OAUTH_TOKEN_FILE: ${CLAUDE_CODE_OAUTH_TOKEN_FILE:-}
+      ARDAI_JIRA_EMAIL_FILE: ${ARDAI_JIRA_EMAIL_FILE:-}
+      ARDAI_JIRA_TOKEN_FILE: ${ARDAI_JIRA_TOKEN_FILE:-}
+      ARDAI_GIT_TOKEN_FILE: ${ARDAI_GIT_TOKEN_FILE:-}
+      ARDAI_GIT_USERNAME: ${ARDAI_GIT_USERNAME:-git}
+      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-}
+      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-}
+      GIT_COMMITTER_NAME: ${GIT_COMMITTER_NAME:-}
+      GIT_COMMITTER_EMAIL: ${GIT_COMMITTER_EMAIL:-}
+    volumes:
+      # Same absolute path: Docker commands address paths on the HOST daemon.
+      - type: bind
+        source: ${ARDAI_WORKSPACE:?Set ARDAI_WORKSPACE to the absolute workspace path}
+        target: ${ARDAI_WORKSPACE:?Set ARDAI_WORKSPACE to the absolute workspace path}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ARDAI_HOME_DIR:-./secrets/home}
+        target: /home/node
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ARDAI_SECRETS_DIR:-./secrets}
+        target: /run/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DOCKER_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
