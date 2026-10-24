@@ -36,6 +36,9 @@
   "autoStartRunner": false,
   "maxRunMinutes": 120,
   "maxAttempts": 2,
+  "quality": {
+    "summaryFile": null
+  },
   "budget": {
     "enabled": true,
     "window": 8,

@@ -26,6 +26,7 @@ import { planPhaseTests } from './lib/phasetests.mjs';
 import { RUNNABLE, depsDone as dependenciesDone, selectTask as selectPlannedTask } from './lib/planning.mjs';
 import { hintsMarkdown, collectHints } from './lib/hints.mjs';
 import { formatLine, listLogs, tailActivity, parseLogName, agentKind } from './lib/activity.mjs';
+import { readQualitySummary } from './lib/quality.mjs';
 import { taskUsage, agentUsage, capacity } from './lib/usage.mjs';
 import { GraphStatistics } from './lib/graph-stats.mjs';
 import { summarize as summarizeHandoff } from './lib/handoff.mjs';
@@ -115,7 +116,7 @@ function reportData() {
   const codexSessions = [...new Set(Object.values(config.agents).filter((a) => a.kind === 'codex' && a.sessionsDir).map((a) => expandEnv(a.sessionsDir)))];
   const { ui: _uiConfig, ...cfg } = config; // "ui" ist hier die Server-Konfiguration, nicht die Seitensteuerung
   const overage = Object.fromEntries(Object.keys(config.agents).map((n) => [n, agentCfgFor(n).allowOverage]));
-  return { ...cfg, usage, agentUsage: agentUsage(logDir, config.agents), graphStats: graphStatistics.snapshot(), overage, capacity: capacity(logDir, codexSessions, config.agents) };
+  return { ...cfg, usage, agentUsage: agentUsage(logDir, config.agents), graphStats: graphStatistics.snapshot(), quality: readQualitySummary(config.quality?.summaryFile ? path.resolve(repoRoot, config.quality.summaryFile) : null), overage, capacity: capacity(logDir, codexSessions, config.agents) };
 }
 
 function renderLiveReport() {
