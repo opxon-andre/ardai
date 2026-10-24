@@ -116,3 +116,28 @@ test('live report offers reload and indicates a pending restart', () => {
   assert.match(buildReportHtml({}, { ui }), /"instance":"123"/);
   assert.doesNotMatch(buildReportHtml({}), /data-action="reload"/);
 });
+
+test('siblings share one card per kind with individual tasks and overage switches', () => {
+  const agents = { codex: { kind: 'codex' }, codex2: { kind: 'codex' }, claude: { kind: 'claude' }, helper: { kind: 'claude', enabled: false } };
+  const state = { agents: { codex: { runningTask: 'DEV-1' }, codex2: { runningTask: 'DEV-2' }, claude: { blockedUntil: '2099-01-01' } },
+    tasks: [{ id: 'DEV-1', title: 'First <task>', status: 'running' }, { id: 'DEV-2', title: 'Second', status: 'running' }] };
+  const before = structuredClone(state);
+  const html = buildReportHtml(state, { agents, fragmentOnly: true, ui: { t: makeT('de') }, overage: { codex2: true },
+    jiraBaseUrl: 'https://jira.example.invalid',
+    activity: [{ agent: 'codex2', task: 'DEV-2', updatedAt: Date.now(), items: [{ text: 'Editing <file>' }] }],
+    capacity: { codex: { windows: [{ label: '5 Stunden', percent: 42 }] } } });
+  assert.equal((html.match(/class="agent-card"/g) || []).length, 2);
+  assert.equal((html.match(/class="agent-instance"/g) || []).length, 4);
+  const codex = html.slice(html.indexOf('<strong>Codex</strong>'), html.indexOf('<strong>Claude</strong>'));
+  assert.match(codex, /data-agent="codex"/);
+  assert.match(codex, /data-agent="codex2"/);
+  assert.match(codex, /DEV-1.*First &lt;task&gt;/);
+  assert.match(codex, /DEV-2.*Second/);
+  assert.match(codex, /Editing &lt;file&gt;/);
+  assert.equal((codex.match(/role="meter"/g) || []).length, 1);
+  assert.match(codex, /data-overage="codex2" checked/);
+  assert.match(html, /gesperrt bis/);
+  assert.match(html, /deaktiviert/);
+  assert.deepEqual(state, before);
+  assert.equal((buildReportHtml(state, { agents }).match(/class="agent-card"/g) || []).length, 2);
+});

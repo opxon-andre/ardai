@@ -350,6 +350,15 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `agents.codex.bySize.S` | object (see child fields) | Override for small tasks. |
 | `agents.codex.bySize.S.label` | `"Reasoning low"` | Displayed model/reasoning name. |
 | `agents.codex.bySize.S.args` | `["-c","model_reasoning_effort=\"low\""]` | Additional CLI arguments for this size. |
+| `agents.codex2` | object (see child fields) | Second parallel Codex instance with its own worktree. |
+| `agents.codex2.extends` | `"codex"` | Inherits the final Codex configuration, including project overrides; instance settings take precedence. |
+
+Codex runs in two independent instances by default: `codex` and `codex2`.
+Set `agents.codex2.enabled` to `false` to use only one. Disabling `codex` also
+disables its sibling unless `codex2.enabled` explicitly overrides it.
+The dashboard groups instances by kind into one Codex card and one Claude card,
+with a separate task and activity row for each instance. Domain, dependency and
+resource constraints still apply. See [configuration](CONFIGURATION.md).
 
 ### Additional supported fields
 

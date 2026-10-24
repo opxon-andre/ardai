@@ -112,6 +112,9 @@
           ]
         }
       }
+    },
+    "codex2": {
+      "extends": "codex"
     }
   }
 }

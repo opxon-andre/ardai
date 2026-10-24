@@ -353,6 +353,15 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `agents.codex.bySize.S` | Objekt (siehe Unterfelder) | Überschreibung für kleine Aufgaben. |
 | `agents.codex.bySize.S.label` | `"Reasoning low"` | Angezeigter Modell-/Reasoning-Name. |
 | `agents.codex.bySize.S.args` | `["-c","model_reasoning_effort=\"low\""]` | Zusätzliche CLI-Argumente dieser Größe. |
+| `agents.codex2` | Objekt (siehe Unterfelder) | Zweite parallele Codex-Instanz mit eigenem Worktree. |
+| `agents.codex2.extends` | `"codex"` | Erbt die wirksame Codex-Konfiguration einschließlich Projekt-Overrides; eigene Einstellungen haben Vorrang. |
+
+Codex läuft standardmäßig mit zwei unabhängigen Instanzen: `codex` und `codex2`.
+Mit `agents.codex2.enabled: false` bleibt es bei einer. Wird `codex` deaktiviert,
+gilt das auch für den Geschwisteragenten, sofern `codex2.enabled` es nicht explizit
+überschreibt. Die Oberfläche gruppiert Instanzen nach Typ in einer Codex- und einer
+Claude-Kachel, mit eigener Tätigkeitszeile je Instanz. Abhängigkeiten, Arbeitsbereiche
+und exklusive Ressourcen gelten weiterhin. Siehe [Konfiguration](CONFIGURATION.md).
 
 ### Weitere unterstützte Felder
 

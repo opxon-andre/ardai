@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { taskUsage, capacity, formatTokens, formatDuration } from '../lib/usage.mjs';
+import { parseLogName, tailActivity } from '../lib/activity.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(new URL('.usage-', import.meta.url));
@@ -87,4 +88,25 @@ test('usage formatting handles thresholds and invalid durations', () => {
   assert.equal(formatDuration(1000), '< 1 min');
   assert.equal(formatDuration(60000), '1 min');
   assert.equal(formatDuration(3660000), '1 h 01 min');
+});
+
+test('sibling and custom agent logs contribute activity, usage and family capacity', (t) => {
+  const root = fixture(t);
+  const agents = { 'review-claude': { kind: 'claude' }, codex2: { kind: 'codex' } };
+  const file = log(root, 'DEV-1-review-claude-1000.jsonl', [
+    { type: 'result', usage: { input_tokens: 10, output_tokens: 2 } },
+    { type: 'rate_limit_event', rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.1, resetsAt: 9999999999 } } } },
+  ]);
+  const codex = log(root, 'DEV-1-codex2-1200.jsonl', [
+    { type: 'item.completed', item: { type: 'agent_message', text: 'Working in second Codex' } },
+    { type: 'turn.completed', usage: { input_tokens: 20, output_tokens: 3 } },
+  ]);
+  assert.equal(parseLogName(file, agents).agent, 'review-claude');
+  assert.equal(parseLogName(codex).agent, 'codex2');
+  assert.equal(parseLogName(codex).task, 'DEV-1');
+  assert.equal(tailActivity(codex).items[0].text, 'Working in second Codex');
+  assert.equal(tailActivity(file, 30, 2000000, undefined, agents).items[0].text, 'Lauf beendet');
+  assert.equal(taskUsage(root, 'DEV-1', agents).total, 35);
+  assert.deepEqual(taskUsage(root, 'DEV-1', agents).byAgent, { 'review-claude': 12, codex2: 23 });
+  assert.equal(capacity(root, undefined, agents).claude.windows[0].percent, 10);
 });

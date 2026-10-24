@@ -414,3 +414,45 @@ test('runner sends independent Jira tickets concurrently without losing inbox ed
     server.closeAllConnections(); server.close();
   }
 });
+
+test('runner executes two Codex tasks concurrently in separate worktrees', async (t) => {
+  const f = fixture(t);
+  initGit(f.root);
+  const gate = path.join(f.root, 'release-codex');
+  const mock = `const fs = require('node:fs'), path = require('node:path');
+    process.stdin.resume();
+    fs.writeFileSync(path.join(${JSON.stringify(f.root)}, process.env.ORCHESTRATOR_AGENT + '.started'), JSON.stringify({ pid: process.pid, cwd: process.cwd() }));
+    console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: process.env.ORCHESTRATOR_AGENT + ' working' } }));
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(gate)})) process.exit(1); }, 25);`;
+  fs.writeFileSync(path.join(f.root, CONFIG_NAME), JSON.stringify({ runtimeDir: 'runtime', worktreeRoot: 'worktrees',
+    tickSeconds: 0.05, maxAttempts: 1, checkpointMinutes: 0, budget: { enabled: false },
+    agents: { claude: { enabled: false }, codex: { command: process.execPath, commandPrefix: ['-e', mock, '--'], args: ['exec'], sessionsDir: path.join(f.root, 'sessions') } },
+  }));
+  f.state.tasks.forEach((task, i) => Object.assign(task, { status: 'ready', branch: `task/parallel-${i}`, preferredAgent: 'codex' }));
+  f.write();
+  const env = { ...process.env };
+  delete env.ORCHESTRATOR_CONFIG;
+  const child = spawn(process.execPath, [cli, 'run', '--no-ui', '--exit-when-idle'], { cwd: f.root, env, windowsHide: true });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  try {
+    await until(() => ['codex', 'codex2'].every((name) => fs.existsSync(path.join(f.root, name + '.started'))), 'Both Codex instances did not start: ' + output);
+    const first = JSON.parse(fs.readFileSync(path.join(f.root, 'codex.started')));
+    const second = JSON.parse(fs.readFileSync(path.join(f.root, 'codex2.started')));
+    assert.notEqual(first.pid, second.pid);
+    assert.notEqual(first.cwd, second.cwd);
+    const state = f.read();
+    assert.deepEqual(state.tasks.map((task) => task.status), ['running', 'running']);
+    assert.deepEqual(new Set(state.tasks.map((task) => task.assignedAgent)), new Set(['codex', 'codex2']));
+    fs.writeFileSync(gate, 'finish');
+    await until(() => child.exitCode !== null, 'Runner did not finish: ' + output);
+    assert.equal(child.exitCode, 0, output);
+    const html = fs.readFileSync(path.join(f.runtime, 'report.html'), 'utf8');
+    assert.equal((html.match(/class="agent-card"/g) || []).length, 2);
+  } finally {
+    fs.writeFileSync(gate, 'finish');
+    child.kill();
+    await until(() => child.exitCode !== null || child.signalCode !== null, 'Runner did not exit');
+  }
+});

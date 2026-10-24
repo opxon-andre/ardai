@@ -25,7 +25,7 @@ import { makeT } from './lib/i18n.mjs';
 import { planPhaseTests } from './lib/phasetests.mjs';
 import { RUNNABLE, depsDone as dependenciesDone, selectTask as selectPlannedTask } from './lib/planning.mjs';
 import { hintsMarkdown, collectHints } from './lib/hints.mjs';
-import { formatLine, listLogs, tailActivity, parseLogName } from './lib/activity.mjs';
+import { formatLine, listLogs, tailActivity, parseLogName, agentKind } from './lib/activity.mjs';
 import { taskUsage, capacity } from './lib/usage.mjs';
 import { summarize as summarizeHandoff } from './lib/handoff.mjs';
 import { BUDGET_DEFAULTS, estimateTokens, budgetFor, budgetState, rebaseBudget, failureFingerprint, reviewPrompt, parseVerdict, fmtTokens } from './lib/budget.mjs';
@@ -83,10 +83,10 @@ const verbose = process.argv.includes('--verbose') || process.argv.includes('-v'
 
 // Letzte Schritte jedes laufenden Agenten, gelesen aus seinem aktuellen Log.
 function liveActivity(n = 40) {
-  const logs = listLogs(logDir);
+  const logs = listLogs(logDir, config.agents);
   return running().map((t) => {
     const file = logs.filter((l) => l.task === t.id && l.agent === t.assignedAgent).pop()?.file;
-    return file ? tailActivity(file, n, 2_000_000, git.worktreeRoot) : null;
+    return file ? tailActivity(file, n, 2_000_000, git.worktreeRoot, config.agents) : null;
   }).filter(Boolean);
 }
 
@@ -105,13 +105,13 @@ function save() {
 function reportData() {
   const usage = {};
   for (const t of state.tasks) {
-    const u = taskUsage(logDir, t.id);
+    const u = taskUsage(logDir, t.id, config.agents);
     if (u) usage[t.id] = u;
   }
-  const codexSessions = config.agents.codex?.sessionsDir && expandEnv(config.agents.codex.sessionsDir);
+  const codexSessions = [...new Set(Object.values(config.agents).filter((a) => a.kind === 'codex' && a.sessionsDir).map((a) => expandEnv(a.sessionsDir)))];
   const { ui: _uiConfig, ...cfg } = config; // "ui" ist hier die Server-Konfiguration, nicht die Seitensteuerung
   const overage = Object.fromEntries(Object.keys(config.agents).map((n) => [n, agentCfgFor(n).allowOverage]));
-  return { ...cfg, usage, overage, capacity: capacity(logDir, codexSessions) };
+  return { ...cfg, usage, overage, capacity: capacity(logDir, codexSessions, config.agents) };
 }
 
 function renderLiveReport() {
@@ -451,7 +451,7 @@ function retryOrFail(task, reason) {
 
 const budgetOptions = () => ({ ...BUDGET_DEFAULTS, ...(config.budget || {}) });
 const budgetStops = new Map(); // Aufgaben-ID -> 'review' | 'exceeded': Agent wird wegen des Budgets beendet
-const usedTokens = (task) => taskUsage(logDir, task.id)?.total || 0;
+const usedTokens = (task) => taskUsage(logDir, task.id, config.agents)?.total || 0;
 
 // Vor dem ersten Start einmal festlegen: Schätzung aus dem gleitenden Durchschnitt der letzten fertigen Aufgaben gleicher Größe.
 function ensureBudget(task) {
@@ -1454,7 +1454,7 @@ async function cmdLog(args) {
   const filter = args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-n');
 
   const pickFiles = () => {
-    const logs = listLogs(logDir);
+    const logs = listLogs(logDir, config.agents);
     if (filter) {
       const hit = logs.filter((l) => l.task === filter || l.agent === filter || l.task.startsWith(filter)).pop();
       return hit ? [hit.file] : [];
@@ -1466,13 +1466,13 @@ async function cmdLog(args) {
 
   const offsets = new Map();
   const print = (file, items) => {
-    const info = parseLogName(file);
+    const info = parseLogName(file, config.agents);
     for (const i of items) console.log(`${info.agent}/${info.task} ${ACTIVITY_MARK[i.kind] || '•'} ${i.text}`);
   };
   const initial = pickFiles();
   if (!initial.length) { console.log('Noch keine Agent-Logs vorhanden.'); return; }
   for (const file of initial) {
-    print(file, tailActivity(file, n, 2_000_000, git.worktreeRoot).items);
+    print(file, tailActivity(file, n, 2_000_000, git.worktreeRoot, config.agents).items);
     offsets.set(file, fs.statSync(file).size);
   }
   if (!follow) return;
@@ -1491,8 +1491,8 @@ async function cmdLog(args) {
       const text = buf.toString('utf8');
       const end = text.lastIndexOf('\n') + 1; // nur vollständige Zeilen
       offsets.set(file, from + Buffer.byteLength(text.slice(0, end)));
-      const info = parseLogName(file);
-      print(file, text.slice(0, end).split('\n').flatMap((l) => formatLine(l.trim(), info.agent, git.worktreeRoot)));
+      const info = parseLogName(file, config.agents);
+      print(file, text.slice(0, end).split('\n').flatMap((l) => formatLine(l.trim(), agentKind(info.agent, config.agents), git.worktreeRoot)));
     }
   }
 }

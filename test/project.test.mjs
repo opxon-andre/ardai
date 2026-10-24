@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { CONFIG_NAME, SCHEMA_VERSION, deepMerge, findProjectRoot, loadProject, loadState, saveConfig, saveState } from '../lib/project.mjs';
+import { CONFIG_NAME, SCHEMA_VERSION, deepMerge, resolveAgents, findProjectRoot, loadProject, loadState, saveConfig, saveState } from '../lib/project.mjs';
 import { Git } from '../lib/git.mjs';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -148,6 +148,31 @@ test('runtime, reports and worktrees are relative to project root', (t) => {
   assert.equal(custom.runtimeDir, absolute);
   assert.equal(custom.resultsDir, absolute);
   assert.equal(new Git(root, custom.config).worktreeRoot, absolute);
+});
+
+test('second Codex inherits final project settings and can be disabled independently', (t) => {
+  const root = fixture(t);
+  const file = path.join(root, CONFIG_NAME);
+  json(file, { agents: { codex: { command: 'project-codex', args: ['exec', '--json'], env: { EXAMPLE: 'yes' } } } });
+  let { config } = loadProject({ cwd: root, env: {} });
+  assert.equal(config.agents.codex2.enabled, true);
+  assert.deepEqual(config.agents.codex2, config.agents.codex);
+  const git = new Git(root, config);
+  assert.notEqual(git.worktreePath('codex'), git.worktreePath('codex2'));
+  json(file, { agents: { codex: { enabled: false } } });
+  ({ config } = loadProject({ cwd: root, env: {} }));
+  assert.equal(config.agents.codex2.enabled, false);
+  json(file, { agents: { codex2: { enabled: false, args: ['custom'] } } });
+  ({ config } = loadProject({ cwd: root, env: {} }));
+  assert.equal(config.agents.codex.enabled, true);
+  assert.equal(config.agents.codex2.enabled, false);
+  assert.deepEqual(config.agents.codex2.args, ['custom']);
+  assert.notDeepEqual(config.agents.codex.args, ['custom']);
+});
+
+test('agent inheritance rejects unknown parents and cycles', () => {
+  assert.throws(() => resolveAgents({ child: { extends: 'missing' } }), /Unknown parent/);
+  assert.throws(() => resolveAgents({ a: { extends: 'b' }, b: { extends: 'a' } }), /cycle/);
 });
 
 test('legacy state is unchanged on read and backed up exactly once on first save', (t) => {

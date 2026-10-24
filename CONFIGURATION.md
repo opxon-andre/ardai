@@ -68,6 +68,21 @@ allerdings nur dort sinnvoll, wo die jeweilige Option es unterstützt.
 Zum Beispiel behält `{"ui":{"port":4800}}` den Default `ui.enabled: true`.
 Ein Agent wird mit `{"agents":{"codex":{"enabled":false}}}` deaktiviert.
 
+Standardmäßig gibt es zwei Codex-Instanzen, `codex` und `codex2`, mit getrennten
+Worktrees. `codex2` erbt über `"extends": "codex"` die wirksame Konfiguration
+von `codex`, einschließlich projektspezifischer Befehle, Modelle und `enabled`.
+Eigene Einstellungen unter `agents.codex2` überschreiben die geerbten Werte.
+Nur die zweite Instanz lässt sich mit `{"agents":{"codex2":{"enabled":false}}}`
+abschalten. `extends` kann auch für weitere Instanzen verwendet werden;
+unbekannte Eltern und Vererbungszyklen führen zum Abbruch.
+
+Unabhängige Aufgaben können gleichzeitig laufen. Abhängigkeiten, sich überlappende
+Arbeitsbereiche und exklusive Ressourcen bleiben berücksichtigt. Die Oberfläche
+gruppiert Instanzen nach `kind`: eine Kachel für Codex und eine für Claude, darin
+je Instanz eine Tätigkeitszeile mit Ticket, Titel und letzter Aktivität.
+Die Kontingentanzeige steht einmal pro Agententyp in der Kachel; die Schalter für
+kostenpflichtige Kontingente bleiben pro Instanz einstellbar.
+
 Ein relativer Dateiname in `ORCHESTRATOR_CONFIG` bezieht sich auf das aktuelle
 Arbeitsverzeichnis beim Aufruf. Pfade **in** dieser Datei beziehen sich wie
 alle anderen Projektpfade auf die gefundene Projektwurzel. Fehlende Dateien,
