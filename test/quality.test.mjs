@@ -26,7 +26,7 @@ test('summary is normalized, unknown or unsafe values are dropped', () => {
 
 test('reader returns null without a file and an error object for broken files', () => {
   assert.equal(readQualitySummary(null), null);
-  assert.equal(readQualitySummary('does-not-exist.json'), null);
+  assert.deepEqual(readQualitySummary('does-not-exist.json'), { empty: true });
   const file = new URL('.quality-broken.json', import.meta.url);
   fs.writeFileSync(file, '{ nope');
   try { assert.deepEqual(readQualitySummary(file.pathname.replace(/^\/([A-Za-z]:)/, '$1')), { error: 'unlesbar oder falsches Schema' }); } finally { fs.rmSync(file, { force: true }); }
