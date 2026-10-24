@@ -9,6 +9,7 @@ import { patchTask, followUpIdentity } from '../lib/task-edits.mjs';
 import { CONFIG_NAME, loadProject } from '../lib/project.mjs';
 import { taskPrompt, resumePrompt } from '../lib/prompts.mjs';
 import { prepareReload } from '../lib/reload.mjs';
+import { familyOverage } from '../lib/agents.mjs';
 
 const cli = fileURLToPath(new URL('../orchestrator.mjs', import.meta.url));
 const agents = { claude: {}, codex: {} };
@@ -64,6 +65,28 @@ test('patch applies all fields atomically, rejects cycles and protects running t
     assert.throws(() => patchTask(task, args, tasks, agents), /running/);
   }
   assert.equal(patchTask(task, ['--note', 'allowed'], tasks, agents), 'allowed');
+});
+
+test('paid quota uses one persisted decision for all siblings and clears their blocks', (t) => {
+  const f = fixture(t);
+  f.state.agents = { codex: { allowOverage: false, blockedUntil: '2099-01-01' },
+    codex2: { allowOverage: true, blockedUntil: '2099-01-01' }, claude: { allowOverage: false } };
+  f.write();
+  const { config } = loadProject({ cwd: f.root, env: {} });
+  assert.equal(familyOverage(config.agents, f.state, 'codex2'), false, 'canonical flag wins over legacy sibling differences');
+  success(run(f.root, 'overage', 'codex2', 'on'));
+  let state = f.read();
+  for (const name of ['codex', 'codex2']) {
+    assert.equal(state.agents[name].allowOverage, true);
+    assert.equal(state.agents[name].blockedUntil, null);
+    assert.equal(familyOverage(config.agents, state, name), true);
+  }
+  assert.equal(state.agents.claude.allowOverage, false);
+  success(run(f.root, 'overage', 'codex', 'off'));
+  state = f.read();
+  assert.equal(state.agents.codex.allowOverage, false);
+  assert.equal(state.agents.codex2.allowOverage, false);
+  assert.equal(familyOverage({ a: { kind: 'claude', allowOverage: true }, b: { kind: 'claude' } }, { agents: {} }, 'b'), true);
 });
 
 test('CLI patch persists notes and rejects invalid changes without writing', (t) => {

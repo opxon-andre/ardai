@@ -446,7 +446,11 @@ damit der Button erscheint.
 `stop` beendet alle Agenten und den Runner. `clean <ID>` löscht lokale/Remote-Task-Branches,
 Fragen und Testergebnisse und merkt Jira To Do vor; integrierte Aufgaben sind davon ausgeschlossen.
 `archive`/`unarchive` verbergen/zeigen Einträge. `overage codex on|off` (auch claude) schaltet
-kostenpflichtige Nutzung im State. `sync` wiederholt vorgemerkte Quellupdates; nach drei Fehlern
+kostenpflichtige Nutzung im State für alle Geschwister desselben Agententyps. Jede Kachel
+hat einen gemeinsamen Schalter und die Projekt-Tokenstatistik inklusive Archiv:
+In = New + Cache; Out enthält Reasoning/Thinking. Die Werte stammen aus vorhandenen
+Projektlogs und bilden keinen kontoweiten Verbrauch ab.
+`sync` wiederholt vorgemerkte Quellupdates; nach drei Fehlern
 werden sie zu Fragen. Ticketupdates nutzen kurze Agenten-MCP-Aufrufe; fehlende Agenten verzögern sie.
 
 Mit REST-Zugang laufen Jira-HTTP und die optionale Ollama-Formulierung in einem eigenen

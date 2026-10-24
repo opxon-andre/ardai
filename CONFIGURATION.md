@@ -80,8 +80,16 @@ Unabhängige Aufgaben können gleichzeitig laufen. Abhängigkeiten, sich überla
 Arbeitsbereiche und exklusive Ressourcen bleiben berücksichtigt. Die Oberfläche
 gruppiert Instanzen nach `kind`: eine Kachel für Codex und eine für Claude, darin
 je Instanz eine Tätigkeitszeile mit Ticket, Titel und letzter Aktivität.
-Die Kontingentanzeige steht einmal pro Agententyp in der Kachel; die Schalter für
-kostenpflichtige Kontingente bleiben pro Instanz einstellbar.
+Die Kachel zeigt zuerst die Tätigkeiten, dann die Kontingentskala, einen gemeinsamen
+Schalter für kostenpflichtige Kontingente, den Kapazitätsstand und den Tokenverbrauch.
+Die Freigabe gilt für alle Instanzen desselben `kind`, auch bei Bedienung per CLI.
+Der Anfangswert und alte State-Werte werden von der kanonischen Instanz (`codex`
+oder `claude`, andernfalls der ersten Instanz des Typs) übernommen.
+Die Tokenstatistik summiert alle vorhandenen Projektlogs inklusive Importen und
+archivierter Tickets: In = New + Cache, Out = Ausgabe inklusive Reasoning/Thinking.
+New entspricht der neu verarbeiteten Eingabe; Cache der aus dem Cache gelesenen
+Eingabe. Laufende Läufe können vorläufige Werte liefern. Es wird kein vollständiger
+Kontoverbrauch außerhalb dieses Projekts erfasst.
 
 Ein relativer Dateiname in `ORCHESTRATOR_CONFIG` bezieht sich auf das aktuelle
 Arbeitsverzeichnis beim Aufruf. Pfade **in** dieser Datei beziehen sich wie
@@ -91,6 +99,19 @@ ungültiges JSON und unbekannte Schema-Versionen führen zum Abbruch.
 Die Markenfelder (`brand`) sowie CLI-Aliase und kompatible Config-/Protokoll-
 und Stopp-Label-Namen beschreibt [Branding](README.md#branding). Ein explizites
 `runtimeDir` hat Vorrang vor `brand.runtimeDir`.
+
+## Code-Review-Graph-Statistik
+
+Neben den Agentenkacheln erscheint bei aktiviertem `codeGraph.python` oder einem
+vorhandenen lokalen Index eine eigene Kachel „Code Review Graph“. Sie zeigt pro
+Projekt-/Agenten-Worktree Dateien, Knoten, Beziehungen, Funktionen, Klassen,
+Sprachen, Branch und Indexstand. Die Werte mehrerer Worktrees werden nicht addiert.
+Unvollständige, fehlende oder gerade gesperrte Indizes werden entsprechend markiert.
+Die Abfrage läuft einmal beim ersten Anzeigen im Hintergrund und anschließend nur,
+wenn ein Ticket erfolgreich abgeschlossen und nach `integration` gemergt wurde.
+Regelmäßige UI-Aktualisierungen lösen keine erneute Graph-Abfrage aus.
+Sie liest vorhandene Datenbanken, ohne einen Index aufzubauen oder das Schema zu
+migrieren. Die Statistik misst den Indexbestand, keine geschätzte Tokenersparnis.
 
 ## Pfad-Referenz
 

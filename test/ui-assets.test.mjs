@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { UI_SCRIPT } from '../lib/ui-assets.mjs';
+import { UI_SCRIPT, STATIC_SCRIPT } from '../lib/ui-assets.mjs';
 
 test('reload button requests a restart and a changed server instance reloads the whole page', async () => {
   let click, interval, reloads = 0;
@@ -101,4 +101,63 @@ test('bulk archive preserves selection across refresh, selects all and submits o
   all.checked = false;
   all.listeners.change();
   assert.equal(button.disabled, true);
+});
+
+test('task sorting handles natural ticket order, all fields, reset and live refresh', async () => {
+  const storage = new Map();
+  let table, body, buttons, interval;
+  const tasks = [
+    { ticket: 'DEV-10', epic: 'EPIC-2', agent: 'codex2', status: 'Bereit' },
+    { ticket: 'DEV-2', epic: 'EPIC-1', agent: 'claude', status: 'Läuft' },
+    { ticket: 'DEV-1', epic: '', agent: '', status: 'Fertig' },
+  ];
+  function render() {
+    body = { rows: tasks.map((task) => ({ checked: true, getAttribute: (key) => task[key.slice('data-sort-'.length)] })),
+      appendChild(row) { this.rows.splice(this.rows.indexOf(row), 1); this.rows.push(row); } };
+    buttons = Object.fromEntries(['ticket', 'epic', 'agent', 'status'].map((field) => [field, {
+      parentNode: { setAttribute(key, value) { this[key] = value; } }, mark: {},
+      getAttribute: () => field, querySelector() { return this.mark; },
+      addEventListener(type, handler) { this[type] = handler; },
+    }]));
+    table = { querySelector: () => body, querySelectorAll: () => Object.values(buttons) };
+  }
+  render();
+  const document = { querySelector: (selector) => selector === '#sec-tasks table' ? table : null,
+    querySelectorAll: () => [], addEventListener() {},
+    getElementById: (id) => id === 'app' ? { set innerHTML(value) { render(); } } : null };
+  const context = { document, localStorage: { getItem: (key) => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
+    window: { ORCHESTRATOR: { texts: {} }, scrollTo() {} }, sessionStorage: { getItem: () => null },
+    setInterval: (fn) => { interval = fn; }, setTimeout() {}, clearTimeout() {},
+    fetch: async () => ({ ok: true, text: async () => 'updated fragment' }),
+  };
+  const order = () => body.rows.map((row) => row.getAttribute('data-sort-ticket'));
+  vm.runInNewContext(UI_SCRIPT, context);
+  assert.deepEqual(order(), ['DEV-10', 'DEV-2', 'DEV-1']);
+  const originalRows = body.rows.slice();
+  buttons.ticket.click();
+  assert.deepEqual(order(), ['DEV-1', 'DEV-2', 'DEV-10']);
+  assert.equal(buttons.ticket.parentNode['aria-sort'], 'ascending');
+  assert.ok(body.rows.every((row) => originalRows.includes(row) && row.checked));
+  buttons.ticket.click();
+  assert.deepEqual(order(), ['DEV-10', 'DEV-2', 'DEV-1']);
+  assert.equal(buttons.ticket.parentNode['aria-sort'], 'descending');
+  buttons.ticket.click();
+  assert.equal(JSON.parse(storage.get('ardai-task-sort')), null);
+  assert.equal(buttons.ticket.parentNode['aria-sort'], 'none');
+  buttons.epic.click();
+  assert.deepEqual(order(), ['DEV-2', 'DEV-10', 'DEV-1']);
+  buttons.epic.click();
+  assert.deepEqual(order(), ['DEV-10', 'DEV-2', 'DEV-1'], 'missing epic stays last in either direction');
+  buttons.agent.click();
+  assert.deepEqual(order(), ['DEV-2', 'DEV-10', 'DEV-1']);
+  buttons.status.click();
+  assert.deepEqual(order(), ['DEV-10', 'DEV-1', 'DEV-2']);
+  buttons.ticket.click();
+  interval();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order(), ['DEV-1', 'DEV-2', 'DEV-10']);
+  assert.equal(buttons.ticket.parentNode['aria-sort'], 'ascending');
+  render();
+  vm.runInNewContext(STATIC_SCRIPT.replace('__REFRESH__', '60'), context);
+  assert.deepEqual(order(), ['DEV-1', 'DEV-2', 'DEV-10'], 'saved choice also works in file reports');
 });

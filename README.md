@@ -446,7 +446,10 @@ to make the button available.
 `stop` stops all agents and the runner. `clean <ID>` deletes local/remote task branches and
 task questions/results, and queues Jira To Do; integrated tasks cannot be cleaned.
 `archive`/`unarchive` hide/show records. `overage codex on|off` (also claude) changes paid
-usage permission in state. `sync` retries queued source updates; after three failures they become questions.
+usage permission in state for all siblings of that agent kind. Each agent card has one
+shared switch and project token totals (including archived tickets): In = New + Cache;
+Out includes reasoning/thinking. Totals use retained project logs, not account-wide usage.
+`sync` retries queued source updates; after three failures they become questions.
 Ticket updates use short agent MCP calls; unavailable agents delay them.
 
 With REST credentials, Jira HTTP requests and optional Ollama wording run in a dedicated

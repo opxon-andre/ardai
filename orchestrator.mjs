@@ -9,7 +9,7 @@ import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readJson, nowIso, log, expandEnv, sh } from './lib/util.mjs';
 import { Git, renderPrePushHook } from './lib/git.mjs';
-import { AgentRun, latestCodexRateLimits } from './lib/agents.mjs';
+import { AgentRun, latestCodexRateLimits, familyOverage } from './lib/agents.mjs';
 import { taskPrompt, resumePrompt, importPrompt } from './lib/prompts.mjs';
 import { spawn } from 'node:child_process';
 import { renderReport, buildReportHtml } from './lib/report.mjs';
@@ -26,7 +26,8 @@ import { planPhaseTests } from './lib/phasetests.mjs';
 import { RUNNABLE, depsDone as dependenciesDone, selectTask as selectPlannedTask } from './lib/planning.mjs';
 import { hintsMarkdown, collectHints } from './lib/hints.mjs';
 import { formatLine, listLogs, tailActivity, parseLogName, agentKind } from './lib/activity.mjs';
-import { taskUsage, capacity } from './lib/usage.mjs';
+import { taskUsage, agentUsage, capacity } from './lib/usage.mjs';
+import { GraphStatistics } from './lib/graph-stats.mjs';
 import { summarize as summarizeHandoff } from './lib/handoff.mjs';
 import { BUDGET_DEFAULTS, estimateTokens, budgetFor, budgetState, rebaseBudget, failureFingerprint, reviewPrompt, parseVerdict, fmtTokens } from './lib/budget.mjs';
 import { loadProject, loadState, saveState } from './lib/project.mjs';
@@ -80,6 +81,9 @@ for (const action of state.sourceActions || []) { action.id ||= crypto.randomUUI
 for (const name of Object.keys(config.agents)) state.agents[name] ||= {};
 
 const verbose = process.argv.includes('--verbose') || process.argv.includes('-v');
+const graphStatistics = new GraphStatistics({ repoRoot, worktreeRoot: git.worktreeRoot,
+  agents: config.agents, enabled: Boolean(config.codeGraph?.python),
+  onUpdate: () => { try { renderLiveReport(); } catch { /* next report retries */ } } });
 
 // Letzte Schritte jedes laufenden Agenten, gelesen aus seinem aktuellen Log.
 function liveActivity(n = 40) {
@@ -111,7 +115,7 @@ function reportData() {
   const codexSessions = [...new Set(Object.values(config.agents).filter((a) => a.kind === 'codex' && a.sessionsDir).map((a) => expandEnv(a.sessionsDir)))];
   const { ui: _uiConfig, ...cfg } = config; // "ui" ist hier die Server-Konfiguration, nicht die Seitensteuerung
   const overage = Object.fromEntries(Object.keys(config.agents).map((n) => [n, agentCfgFor(n).allowOverage]));
-  return { ...cfg, usage, overage, capacity: capacity(logDir, codexSessions, config.agents) };
+  return { ...cfg, usage, agentUsage: agentUsage(logDir, config.agents), graphStats: graphStatistics.snapshot(), overage, capacity: capacity(logDir, codexSessions, config.agents) };
 }
 
 function renderLiveReport() {
@@ -148,8 +152,7 @@ const running = () => state.tasks.filter((t) => t.status === 'running');
 // liegt im State (über Web/CLI umschaltbar), config.json liefert nur den Standard.
 function agentCfgFor(name) {
   const base = config.agents[name];
-  const flag = state.agents[name]?.allowOverage;
-  return { ...base, allowOverage: typeof flag === 'boolean' ? flag : Boolean(base.allowOverage) };
+  return { ...base, allowOverage: familyOverage(config.agents, state, name) };
 }
 
 function addNote(task, note) {
@@ -386,6 +389,7 @@ function finishTask(agent, task, wt, outcome) {
       const merge = git.mergeIntoIntegration(task.branch, `Merge ${task.branch}: ${task.title}`);
       if (merge.ok) {
         task.status = DONE;
+        graphStatistics.invalidate();
         task.doneAt = nowIso();
         task.tokensUsed = usedTokens(task) || undefined;
         addNote(task, `Fertig, in ${config.integrationBranch} gemergt. ${result.summary || ''}`.trim());
@@ -620,7 +624,12 @@ async function applyCommand(cmd, args = []) {
   }
   if (cmd === 'import') { await importTasks(args[0]); return 'Import complete / Import abgeschlossen'; }
   if (cmd === 'init') { cmdInit(); return 'Init complete'; }
-  if (cmd === 'report') { renderLiveReport(); return link(writeResultsSnapshot()); }
+  if (cmd === 'report') {
+    graphStatistics.snapshot();
+    await graphStatistics.pending;
+    renderLiveReport();
+    return link(writeResultsSnapshot());
+  }
   if (cmd === 'sync') {
     for (const action of state.sourceActions || []) delete action.retryAt;
     await flushSourceActions();
@@ -684,9 +693,13 @@ async function applyCommand(cmd, args = []) {
     const [name, value] = args;
     if (!config.agents[name]) throw new Error(`Unbekannter Agent ${name}`);
     const enabled = value === true || ['on', 'an', 'true', '1'].includes(String(value).toLowerCase());
-    state.agents[name].allowOverage = enabled;
-    // Beim Einschalten eine Kontingent-Sperre aufheben, damit der Agent sofort weiterarbeiten kann
-    if (enabled && state.agents[name].blockedUntil) Object.assign(state.agents[name], { blockedUntil: null, blockReason: null });
+    for (const [sibling, cfg] of Object.entries(config.agents)) {
+      if (cfg.kind !== config.agents[name].kind) continue;
+      const agent = state.agents[sibling] ||= {};
+      agent.allowOverage = enabled;
+      // Lift quota blocks for the whole family when paid usage is enabled.
+      if (enabled && agent.blockedUntil) Object.assign(agent, { blockedUntil: null, blockReason: null });
+    }
     return t('overage.set', { agent: name, state: t(enabled ? 'ui.on' : 'ui.off') });
   }
   if (cmd === 'archive' || cmd === 'unarchive') {

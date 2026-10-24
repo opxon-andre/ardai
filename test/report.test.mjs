@@ -117,15 +117,16 @@ test('live report offers reload and indicates a pending restart', () => {
   assert.doesNotMatch(buildReportHtml({}), /data-action="reload"/);
 });
 
-test('siblings share one card per kind with individual tasks and overage switches', () => {
+test('siblings share one card, one overage switch and family token statistics in the requested order', () => {
   const agents = { codex: { kind: 'codex' }, codex2: { kind: 'codex' }, claude: { kind: 'claude' }, helper: { kind: 'claude', enabled: false } };
   const state = { agents: { codex: { runningTask: 'DEV-1' }, codex2: { runningTask: 'DEV-2' }, claude: { blockedUntil: '2099-01-01' } },
     tasks: [{ id: 'DEV-1', title: 'First <task>', status: 'running' }, { id: 'DEV-2', title: 'Second', status: 'running' }] };
   const before = structuredClone(state);
-  const html = buildReportHtml(state, { agents, fragmentOnly: true, ui: { t: makeT('de') }, overage: { codex2: true },
+  const html = buildReportHtml(state, { agents, fragmentOnly: true, ui: { t: makeT('de') }, overage: { codex: true },
     jiraBaseUrl: 'https://jira.example.invalid',
     activity: [{ agent: 'codex2', task: 'DEV-2', updatedAt: Date.now(), items: [{ text: 'Editing <file>' }] }],
-    capacity: { codex: { windows: [{ label: '5 Stunden', percent: 42 }] } } });
+    capacity: { codex: { at: Date.now(), windows: [{ label: '5 Stunden', percent: 42 }] } },
+    agentUsage: { codex: { input: 100, output: 20, cached: 40, fresh: 60, final: false } } });
   assert.equal((html.match(/class="agent-card"/g) || []).length, 2);
   assert.equal((html.match(/class="agent-instance"/g) || []).length, 4);
   const codex = html.slice(html.indexOf('<strong>Codex</strong>'), html.indexOf('<strong>Claude</strong>'));
@@ -135,9 +136,37 @@ test('siblings share one card per kind with individual tasks and overage switche
   assert.match(codex, /DEV-2.*Second/);
   assert.match(codex, /Editing &lt;file&gt;/);
   assert.equal((codex.match(/role="meter"/g) || []).length, 1);
-  assert.match(codex, /data-overage="codex2" checked/);
+  assert.match(codex, /data-overage="codex" checked/);
+  assert.equal((codex.match(/data-overage=/g) || []).length, 1);
+  assert.equal((html.match(/data-overage=/g) || []).length, 2);
+  assert.match(codex, /<dt>In<\/dt><dd>≈ 100<\/dd>/);
+  assert.match(codex, /<dt>Out<\/dt><dd>≈ 20<\/dd>/);
+  assert.match(codex, /<dt>Cache<\/dt><dd>≈ 40<\/dd>/);
+  assert.match(codex, /<dt>New<\/dt><dd>≈ 60<\/dd>/);
+  const positions = ['data-agent="codex2"', 'role="meter"', 'data-overage=', 'Stand der Kapazität:', 'class="agent-consumption"'].map((s) => codex.indexOf(s));
+  assert.ok(positions.every((p, i) => p >= 0 && (!i || p > positions[i - 1])));
   assert.match(html, /gesperrt bis/);
   assert.match(html, /deaktiviert/);
   assert.deepEqual(state, before);
   assert.equal((buildReportHtml(state, { agents }).match(/class="agent-card"/g) || []).length, 2);
+});
+
+test('graph card sits beside agents and reports separate indexes and unavailable states', () => {
+  const graphStats = { enabled: true, checkedAt: Date.now(), graphs: [
+    { name: 'codex', status: 'ready', files: 5, nodes: 30, edges: 40, functions: 20, classes: 5, languages: ['js<script>'], branch: 'task/<x>', updatedAt: '2026-10-24T10:00:00', incomplete: true },
+    { name: 'codex2', status: 'busy' }, { name: 'claude', status: 'missing' },
+  ] };
+  const html = buildReportHtml({ agents: { codex: {} } }, { graphStats, fragmentOnly: true });
+  const card = html.slice(html.indexOf('class="agent-card graph-card"'), html.indexOf('<h2>Offene Fragen'));
+  assert.match(card, /Code Review Graph/);
+  assert.match(card, /<dt>Dateien<\/dt><dd>5<\/dd>/);
+  assert.match(card, /<dt>Knoten<\/dt><dd>30<\/dd>/);
+  assert.match(card, /<dt>Beziehungen<\/dt><dd>40<\/dd>/);
+  assert.match(card, /Indexaufbau unvollständig/);
+  assert.match(card, /Index wird gerade aktualisiert/);
+  assert.match(card, /Noch kein Index aufgebaut/);
+  assert.match(card, /js&lt;script&gt;/);
+  assert.match(card, /task\/&lt;x&gt;/);
+  assert.doesNotMatch(card, /<script>/);
+  assert.doesNotMatch(buildReportHtml({}, { graphStats: { enabled: false, graphs: [] } }), /class="agent-card graph-card"/);
 });

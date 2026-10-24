@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { taskUsage, capacity, formatTokens, formatDuration } from '../lib/usage.mjs';
+import { taskUsage, agentUsage, capacity, formatTokens, formatDuration } from '../lib/usage.mjs';
 import { parseLogName, tailActivity } from '../lib/activity.mjs';
 
 function fixture(t) {
@@ -109,4 +109,22 @@ test('sibling and custom agent logs contribute activity, usage and family capaci
   assert.equal(taskUsage(root, 'DEV-1', agents).total, 35);
   assert.deepEqual(taskUsage(root, 'DEV-1', agents).byAgent, { 'review-claude': 12, codex2: 23 });
   assert.equal(capacity(root, undefined, agents).claude.windows[0].percent, 10);
+});
+
+test('family token totals count each run once, include imports and refresh partial usage', (t) => {
+  const root = fixture(t);
+  const agents = { helper: { kind: 'claude' } };
+  assert.deepEqual(agentUsage(root, agents), {});
+  log(root, 'ARCHIVED-1-codex-1000.jsonl', [{ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 40, output_tokens: 10 } }]);
+  log(root, 'ARCHIVED-1-codex2-1200.jsonl', [{ type: 'turn.completed', usage: { input_tokens: 20, cached_input_tokens: 5, output_tokens: 2 } }]);
+  const partial = log(root, 'import-helper-1500.jsonl', [
+    { type: 'assistant', message: { id: 'm', usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 3 } } },
+    { type: 'assistant', message: { id: 'm', usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 3 } } },
+  ]);
+  let totals = agentUsage(root, agents);
+  assert.deepEqual(totals.codex, { input: 120, fresh: 75, cached: 45, output: 12, total: 132, final: true, runs: 2 });
+  assert.deepEqual(totals.claude, { input: 35, fresh: 15, cached: 20, output: 3, total: 38, final: false, runs: 1 });
+  fs.appendFileSync(partial, JSON.stringify({ type: 'result', usage: { input_tokens: 12, cache_read_input_tokens: 20, output_tokens: 8 } }) + '\n');
+  totals = agentUsage(root, agents);
+  assert.deepEqual(totals.claude, { input: 32, fresh: 12, cached: 20, output: 8, total: 40, final: true, runs: 1 });
 });
