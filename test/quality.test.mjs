@@ -43,3 +43,9 @@ test('status page shows coverage, findings, gate and detail links; hidden withou
   assert.doesNotMatch(html, /javascript:/);
   assert.doesNotMatch(buildReportHtml({ agents: {} }, { quality: null, fragmentOnly: true }), /quality-card/);
 });
+
+test('configured but missing summary shows a placeholder card', () => {
+  const html = buildReportHtml({ agents: {} }, { quality: { empty: true }, fragmentOnly: true });
+  assert.match(html, /quality-card/);
+  assert.match(html, /noch keine Prüfung gelaufen/);
+});
