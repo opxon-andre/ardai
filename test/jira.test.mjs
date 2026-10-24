@@ -103,3 +103,34 @@ test('a retry resumes after persisted steps without posting a successful comment
   assert.equal(calls.filter(([method]) => method === 'POST').length, 1);
   assert.deepEqual(action.completedSteps, ['comment', 'labels']);
 });
+
+test('restricted workflow: started on an already reviewed ticket and cleaned from In Progress are skipped instead of failing', async () => {
+  for (const [type, status, transitions] of [
+    ['started', 'In Review', [{ id: '1', name: 'Done', to: { name: 'Done' } }]],
+    ['cleaned', 'In Progress', [{ id: '2', name: 'Review', to: { name: 'In Review' } }]],
+  ]) {
+    const s = await stub((req) => {
+      if (req.url.includes('fields=status')) return { json: { fields: { status: { name: status } } } };
+      if (req.url.endsWith('/transitions') && req.method === 'GET') return { json: { transitions } };
+    });
+    const client = new JiraClient({ baseUrl: s.url, email: 'a@b', token: 'x' });
+    await applyAction(client, { type, taskId: 'T-1', branch: 'task/T-1', comment: 'c' }, { src: {}, t });
+    assert.equal(s.calls.some((c) => c.method === 'POST' && c.url.endsWith('/transitions')), false, type);
+    s.server.close();
+  }
+});
+
+test('review goes through In Progress when the ticket is still in To Do', async () => {
+  let status = 'To Do';
+  const s = await stub((req, call) => {
+    if (req.url.includes('fields=status')) return { json: { fields: { status: { name: status } } } };
+    if (req.url.endsWith('/transitions') && req.method === 'GET') {
+      return { json: { transitions: status === 'To Do' ? [{ id: '11', name: 'Start', to: { name: 'In Progress' } }] : [{ id: '31', name: 'Review', to: { name: 'In Review' } }] } };
+    }
+    if (req.url.endsWith('/transitions') && req.method === 'POST') status = call.body.transition.id === '11' ? 'In Progress' : 'In Review';
+  });
+  const client = new JiraClient({ baseUrl: s.url, email: 'a@b', token: 'x' });
+  await applyAction(client, { type: 'review', taskId: 'T-1', branch: 'task/T-1', comment: 'c' }, { src: {}, t });
+  assert.deepEqual(s.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/transitions')).map((c) => c.body.transition.id), ['11', '31']);
+  s.server.close();
+});
