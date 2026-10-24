@@ -27,6 +27,8 @@ import { RUNNABLE, depsDone as dependenciesDone, selectTask as selectPlannedTask
 import { hintsMarkdown, collectHints } from './lib/hints.mjs';
 import { formatLine, listLogs, tailActivity, parseLogName } from './lib/activity.mjs';
 import { taskUsage, capacity } from './lib/usage.mjs';
+import { summarize as summarizeHandoff } from './lib/handoff.mjs';
+import { BUDGET_DEFAULTS, estimateTokens, budgetFor, budgetState, rebaseBudget, failureFingerprint, reviewPrompt, parseVerdict, fmtTokens } from './lib/budget.mjs';
 import { loadProject, loadState, saveState } from './lib/project.mjs';
 import { parseEdits, patchTask, followUpIdentity, extendDomain } from './lib/task-edits.mjs';
 
@@ -230,6 +232,7 @@ function startTask(agent, task) {
   const sizeArgs = config.agents[agent].bySize?.[task.size]?.args || [];
   const sizeLabel = config.agents[agent].bySize?.[task.size]?.label;
 
+  ensureBudget(task);
   task.status = 'running';
   if (!task.jiraStarted) { task.jiraStarted = true; queueSourceAction(task, 'started'); }
   task.assignedAgent = agent;
@@ -320,8 +323,17 @@ function readResult(wt) {
 function finishTask(agent, task, wt, outcome) {
   (task.sessions ||= {})[agent] = outcome.sessionId;
   if (stopRequested.delete(task.id)) {
-    // vom Nutzer abgebrochen: Arbeit sichern, nicht als Fehlschlag/Outage werten
-    finalizeStop(task, agent);
+    const budgetKind = budgetStops.get(task.id);
+    budgetStops.delete(task.id);
+    // vom Nutzer (oder vom Token-Budget) abgebrochen: Arbeit sichern, nicht als Fehlschlag/Outage werten
+    finalizeStop(task, agent, { budget: Boolean(budgetKind) });
+    if (budgetKind) {
+      task.budgetReview = true; // Status bleibt 'stopped', bis die Prüfung entschieden hat
+      const key = `review:${task.id}`;
+      activeRuns.set(key, reviewBudgetStop(task, agent, budgetKind)
+        .catch((err) => { budgetQuestion(task, usedTokens(task), `Prüfung fehlgeschlagen: ${err.message}`); })
+        .finally(() => { activeRuns.delete(key); save(); wake(); }));
+    }
     save();
     return;
   }
@@ -359,7 +371,7 @@ function finishTask(agent, task, wt, outcome) {
   } else if (outcome.timedOut && task.type === 'phase-test' && config.phaseTests?.maxRunMinutes) {
     // Zeitbudget eines Phasentests ist hart: kein endloses Wiederaufnehmen, der Stand steht auf dem Branch.
     release('Timeout');
-    task.attempts = Math.max(task.attempts || 0, config.maxAttempts);
+    task.failures = Math.max(task.failures || 0, config.maxAttempts - 1);
     retryOrFail(task, `Zeitbudget von ${config.phaseTests.maxRunMinutes} min für Phasentests überschritten`);
   } else if (outcome.timedOut) {
     release('Timeout');
@@ -374,6 +386,8 @@ function finishTask(agent, task, wt, outcome) {
       const merge = git.mergeIntoIntegration(task.branch, `Merge ${task.branch}: ${task.title}`);
       if (merge.ok) {
         task.status = DONE;
+        task.doneAt = nowIso();
+        task.tokensUsed = usedTokens(task) || undefined;
         addNote(task, `Fertig, in ${config.integrationBranch} gemergt. ${result.summary || ''}`.trim());
         const tests = result.tests || [];
         const passed = tests.filter((x) => x.result === 'pass').length;
@@ -406,20 +420,113 @@ function runLimitMinutes(task) {
   return task.type === 'phase-test' && config.phaseTests?.maxRunMinutes ? config.phaseTests.maxRunMinutes : config.maxRunMinutes;
 }
 
+// Harte Grenze: `failures` zählt alle Fehlschläge einer Aufgabe und wird weder durch Antworten noch durch ein
+// einfaches "retry" zurückgesetzt (nur "retry --force" durch den Menschen). Wiederholt sich derselbe Fehler auf
+// unverändertem Branch-Inhalt, wird sofort aufgegeben, denn ein weiterer Versuch könnte nichts anderes ergeben.
 function retryOrFail(task, reason) {
-  if (task.attempts >= config.maxAttempts) {
+  task.failures = (task.failures || 0) + 1;
+  const tree = git.git(repoRoot, ['rev-parse', `${task.branch}^{tree}`], { check: false }).stdout?.trim() || '';
+  const fingerprint = failureFingerprint(reason, tree);
+  const unchanged = Boolean(tree) && task.lastFailureFingerprint === fingerprint;
+  task.lastFailureFingerprint = fingerprint;
+  if (unchanged || task.failures >= config.maxAttempts) {
     task.status = 'failed';
-    queueSourceAction(task, 'failed', { comment: t('jira.comment.failed', { task: task.id, branch: task.branch, attempts: task.attempts, reason: String(reason).slice(0, 500) }) });
-    addNote(task, `Aufgegeben nach ${task.attempts} Versuchen: ${reason}`);
+    task.needsForce = true;
+    const why = unchanged ? `Gleicher Fehler auf unverändertem Stand wie beim vorigen Versuch: ${reason}` : reason;
+    queueSourceAction(task, 'failed', { comment: t('jira.comment.failed', { task: task.id, branch: task.branch, attempts: task.failures, reason: String(why).slice(0, 500) }) });
+    addNote(task, `Aufgegeben nach ${task.failures} Fehlschlägen${unchanged ? ' (keine Änderung seit dem letzten gleichen Fehler)' : ''}: ${reason}`);
     state.questions.push({
       id: `Q${state.nextQuestion++}`, taskId: task.id, agent: ORCHESTRATOR_AGENT, at: nowIso(), blocking: true, answer: null,
-      question: `${task.id} ist nach ${task.attempts} Versuchen gescheitert. Wie weiter?`,
+      question: `${task.id} ist nach ${task.failures} Fehlschlägen gescheitert${unchanged ? ' (derselbe Fehler auf unverändertem Stand)' : ''}. Wie weiter?`,
       context: reason,
-      assumption: 'Aufgabe ruht, andere Aufgaben laufen weiter. Nach Antwort: Befehl "retry".',
+      assumption: `Aufgabe ruht, andere Aufgaben laufen weiter. Eine Antwort setzt sie nicht fort; Fortsetzen nur bewusst per "${brand.cli} retry ${task.id} --force".`,
     });
   } else {
     task.status = 'ready';
     addNote(task, `Erneuter Versuch geplant: ${reason}`);
+  }
+}
+
+// ---------------------------------------------------------------- Token-Budget je Aufgabe
+
+const budgetOptions = () => ({ ...BUDGET_DEFAULTS, ...(config.budget || {}) });
+const budgetStops = new Map(); // Aufgaben-ID -> 'review' | 'exceeded': Agent wird wegen des Budgets beendet
+const usedTokens = (task) => taskUsage(logDir, task.id)?.total || 0;
+
+// Vor dem ersten Start einmal festlegen: Schätzung aus dem gleitenden Durchschnitt der letzten fertigen Aufgaben gleicher Größe.
+function ensureBudget(task) {
+  const opts = budgetOptions();
+  if (!opts.enabled || task.budget) return;
+  const { estimate, samples } = estimateTokens(state.tasks, (x) => x.tokensUsed ?? usedTokens(x), task.size, opts);
+  task.budget = budgetFor(estimate, samples, opts);
+  addNote(task, estimate
+    ? `Token-Budget: Schätzung ${fmtTokens(estimate)} (Mittel von ${samples} Aufgaben Größe ${task.size || '-'}), harte Grenze ${fmtTokens(task.budget.hardLimit)}`
+    : `Token-Budget: keine Grenze (nur ${samples} fertige Aufgaben Größe ${task.size || '-'}, mindestens ${opts.minSamples} nötig)`);
+}
+
+// Jeder Takt: laufende Aufgaben gegen ihre Grenze prüfen und bei Überschreitung den Agenten beenden.
+function enforceBudgets() {
+  if (!budgetOptions().enabled) return;
+  for (const task of running()) {
+    if (!isRunner || !task.budget?.estimate || stopRequested.has(task.id) || !activeRuns.has(task.assignedAgent)) continue;
+    const verdict = budgetState(task.budget, usedTokens(task));
+    if (verdict === 'ok') continue;
+    log(`${task.id}: Token-Budget ${verdict === 'review' ? 'erreicht (harte Grenze)' : 'äußerste Grenze erreicht'}, Agent wird beendet.`);
+    budgetStops.set(task.id, verdict);
+    stopRequested.add(task.id);
+    killTree(task.pid);
+  }
+}
+
+function budgetQuestion(task, used, why) {
+  state.questions.push({
+    id: `Q${state.nextQuestion++}`, taskId: task.id, agent: ORCHESTRATOR_AGENT, at: nowIso(), blocking: true, answer: null, budget: true,
+    question: `${task.id}: Token-Budget erreicht (verbraucht ${fmtTokens(used)}, Schätzung ${fmtTokens(task.budget.estimate)}, harte Grenze ${fmtTokens(task.budget.hardLimit)}). Wie weiter?`,
+    context: why,
+    assumption: 'Aufgabe ruht, Arbeit ist auf dem Branch gesichert. Eine Antwort setzt sie mit einem Zusatzbudget von der Hälfte der Schätzung fort; "stop" oder "clean" beendet sie.',
+  });
+  task.status = 'needs-human';
+  addNote(task, `Token-Budget erreicht: ${why}`);
+}
+
+// Nach dem Beenden: Stand prüfen. Nur bei eindeutigem Signal (Abschluss mit höchstens ~10 % der Schätzung als Aufschlag) weiterlaufen lassen.
+async function reviewBudgetStop(task, agent, kind) {
+  const used = usedTokens(task);
+  if (kind === 'exceeded') { task.budgetReview = false; budgetQuestion(task, used, 'Auch die äußerste Grenze (nach positiver Prüfung) ist erreicht.'); return; }
+  const wt = git.worktreePath(agent);
+  const handoffFile = path.join(wt, '.handoff', `${task.id}.md`);
+  const handoff = fs.existsSync(handoffFile) ? summarizeHandoff(fs.readFileSync(handoffFile, 'utf8').split(/\r?\n/)) : '';
+  const diffStat = (git.git(repoRoot, ['diff', '--stat', `${config.integrationBranch}...${task.branch}`], { check: false }).stdout || '').trim().split('\n').slice(-25).join('\n');
+  const reviewer = config.agents.claude ? 'claude' : agent;
+  const logFile = path.join(runtimeDir, 'logs', `${task.id}-${reviewer}-${Date.now()}.jsonl`);
+  let verdict = { finishable: false, reason: 'Prüfung nicht möglich.' };
+  try {
+    const run = new AgentRun({
+      name: reviewer, agentCfg: agentCfgFor(reviewer), cwd: wt, logFile, maxRunMinutes: 5,
+      prompt: reviewPrompt({ task, used, budget: task.budget, handoff, diffStat }),
+      extraArgs: reviewer === 'claude' ? ['--model', budgetOptions().reviewerModel, '--max-turns', '1'] : [],
+    });
+    const outcome = await run.start();
+    if (outcome.completed) {
+      const text = fs.readFileSync(logFile, 'utf8').split('\n')
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter((e) => e?.type === 'result').map((e) => e.result).pop();
+      verdict = parseVerdict(text);
+    } else {
+      verdict.reason = `Prüfung fehlgeschlagen: ${outcome.error || 'ohne Ergebnis'}`.slice(0, 200);
+    }
+  } catch (err) {
+    verdict.reason = `Prüfung nicht möglich: ${err.message}`.slice(0, 200);
+  }
+  task.budget.reviewedAt = nowIso();
+  task.budgetReview = false;
+  if (verdict.finishable) {
+    task.budget.extended = true;
+    task.status = 'interrupted';
+    addNote(task, `Token-Budget: Prüfung sieht ein eindeutiges Abschlusssignal (${verdict.reason}); letzte Verlängerung bis ${fmtTokens(task.budget.graceLimit)}.`);
+    task.notes = [...(task.notes || []), `Dein Token-Budget ist fast verbraucht (${fmtTokens(used)} von ${fmtTokens(task.budget.hardLimit)}). Du darfst nur noch abschließen: keine neuen Teilziele, nur Schlussprüfung, ${brand.cli} step DONE und result.json. Die äußerste Grenze liegt bei ${fmtTokens(task.budget.graceLimit)}.`];
+  } else {
+    budgetQuestion(task, used, `Kein eindeutiges Abschlusssignal: ${verdict.reason}`);
   }
 }
 
@@ -529,10 +636,13 @@ async function applyCommand(cmd, args = []) {
     q.answer = text.join(' ');
     q.answeredAt = nowIso();
     const stillBlocking = state.questions.some((x) => x.taskId === q.taskId && x.blocking && !x.answer);
-    if (task && ['needs-human', 'failed'].includes(task.status) && !stillBlocking) {
-      task.status = 'ready';
-      task.attempts = 0;
-      addNote(task, `Antwort auf ${id} erhalten, wieder bereit`);
+    if (task && task.status === 'failed' && !stillBlocking) {
+      // Harte Grenze: eine Antwort setzt eine gescheiterte Aufgabe nicht fort, das tut nur bewusst "retry --force".
+      addNote(task, `Antwort auf ${id} erfasst; Fortsetzen nur mit "${brand.cli} retry ${task.id} --force"`);
+    } else if (task && task.status === 'needs-human' && !stillBlocking) {
+      if (q.budget && task.budget?.estimate) task.budget = rebaseBudget(task.budget, usedTokens(task), budgetOptions());
+      task.status = q.budget ? 'interrupted' : 'ready';
+      addNote(task, `Antwort auf ${id} erhalten, wieder bereit${q.budget ? ' (Zusatzbudget gesetzt)' : ''}`);
     }
     // Antwort auf eine bereits fertige Aufgabe: sonst setzt sie niemand mehr um.
     if (task && (task.status === DONE || task.archivedAt)) {
@@ -551,13 +661,21 @@ async function applyCommand(cmd, args = []) {
     const task = taskById(args[0]);
     if (!task) throw new Error(t('clean.unknown', { task: args[0] }));
     if (task.status === 'running') throw new Error(`${task.id}: running / läuft; erst stoppen.`);
+    const force = args.includes('--force');
+    if ((task.needsForce || (task.failures || 0) >= config.maxAttempts) && !force) {
+      throw new Error(`${task.id}: harte Fehlschlag-Grenze erreicht (${task.failures || 0} Fehlschläge). Ein Mensch muss entscheiden: "${brand.cli} retry ${task.id} --force".`);
+    }
     const wasStopped = task.status === 'stopped';
     if (task.archivedAt) { delete task.archivedAt; task.keepActive = true; }
     // Gestoppt mit vorhandener Session: dieselbe Session fortsetzen (Kontext bleibt erhalten)
     const resumable = wasStopped && task.lastAgent && task.sessions?.[task.lastAgent];
     task.status = resumable ? 'interrupted' : 'ready';
     task.attempts = 0;
-    addNote(task, 'Manuell neu gestartet');
+    if (force) {
+      task.failures = 0; task.needsForce = false; task.lastFailureFingerprint = null;
+      if (task.budget?.estimate) task.budget = rebaseBudget(task.budget, usedTokens(task), budgetOptions());
+    }
+    addNote(task, force ? 'Manuell neu gestartet (--force: Fehlschlag-Zähler und Budget zurückgesetzt)' : 'Manuell neu gestartet');
     if (wasStopped) queueSourceAction(task, 'resumed');
     scope?.add(task.id);
     return t('retry.done', { task: task.id });
@@ -669,7 +787,7 @@ function stopCommand(taskId) {
 }
 
 // Arbeit sichern (Autosave-Commit + Push), Worktree freigeben, Status "stopped".
-function finalizeStop(task, agent) {
+function finalizeStop(task, agent, { budget = false } = {}) {
   const wt = agent ? git.worktreePath(agent) : null;
   if (task.type === 'phase-test') {
     if (wt) removeLocalSecrets(wt);
@@ -684,8 +802,10 @@ function finalizeStop(task, agent) {
   task.assignedAgent = null;
   task.status = 'stopped';
   task.attempts = Math.max(0, (task.attempts || 1) - 1);
-  addNote(task, t('stop.note', { branch: task.branch }));
-  queueSourceAction(task, 'stopped');
+  if (!budget) {
+    addNote(task, t('stop.note', { branch: task.branch }));
+    queueSourceAction(task, 'stopped');
+  }
   log(t('stop.done', { task: task.id, branch: task.branch }));
   if (cleanAfterStop.delete(task.id)) log(cleanTask(task));
 }
@@ -1095,6 +1215,7 @@ async function cmdRun(args, { source = null } = {}) {
       ensurePhaseTests();
       refreshArchive();
       checkpointRunning();
+      enforceBudgets();
       for (const agent of Object.keys(config.agents)) {
         if (activeRuns.has(agent) || !isAvailable(agent)) continue;
         const task = selectTask(agent);
@@ -1226,7 +1347,7 @@ async function startUi({ open = false } = {}) {
           return { message: t('reload.waiting'), afterResponse: restart, onCancel: () => { restart.cancel(); reloadRequested = false; } };
         } catch (err) { reloadRequested = false; throw err; }
       }
-      const args = action === 'answer' ? [body.id, body.text] : action === 'work' ? [body] : action === 'overage' ? [body.agent, body.enabled] : action === 'archive' && body.tasks !== undefined ? body.tasks : [body.task];
+      const args = action === 'answer' ? [body.id, body.text] : action === 'work' ? [body] : action === 'overage' ? [body.agent, body.enabled] : action === 'archive' && body.tasks !== undefined ? body.tasks : action === 'retry' ? [body.task, '--force'] : [body.task]; // Klick in der Oberfläche = bewusste Entscheidung des Menschen
       if (action === 'archive' && (!Array.isArray(args) || !args.length || args.some((id) => typeof id !== 'string' || !id.trim()))) throw new Error('Mindestens eine Aufgaben-ID angeben.');
       if (action === 'clean' && body.confirm !== body.task) throw new Error('Bestätigung fehlt.');
       if (isRunner || runnerAlive()) {

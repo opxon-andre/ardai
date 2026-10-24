@@ -36,6 +36,14 @@
   "autoStartRunner": false,
   "maxRunMinutes": 120,
   "maxAttempts": 2,
+  "budget": {
+    "enabled": true,
+    "window": 8,
+    "minSamples": 3,
+    "hardFactor": 1.5,
+    "graceFactor": 1.6,
+    "reviewerModel": "sonnet"
+  },
   "fallbackBackoffMinutes": 30,
   "quotaThresholdPercent": 97,
   "reimportMinutes": 30,

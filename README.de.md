@@ -310,7 +310,14 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `ollama.timeoutSeconds` | `60` | Timeout je Anfrage; danach gilt der Vorlagentext. |
 | `autoStartRunner` | `false` | retry/answer dürfen einen Hintergrundlauf für den gesamten State starten; --start erlaubt es pro Aufruf. |
 | `maxRunMinutes` | `120` | Agenten-Laufzeitlimit in Minuten; Timeout unterbricht die Aufgabe. |
-| `maxAttempts` | `2` | Fehlversuchsgrenze vor failed und blockierender Frage; Kontingent-Outages zählen nicht. |
+| `maxAttempts` | `2` | Harte Fehlschlaggrenze je Aufgabe vor failed und blockierender Frage; Kontingent-Outages zählen nicht. Antworten und ein einfaches retry setzen sie nicht zurück, nur `retry --force` durch den Menschen. Derselbe Fehler auf unverändertem Branch-Inhalt führt sofort zu failed. |
+| `budget` | Objekt (siehe Kindfelder) | Token-Budget je Aufgabe: Schätzung aus dem gleitenden Durchschnitt der letzten fertigen Aufgaben gleicher Größe, harte Grenze und Prüfung vor jeder Verlängerung. |
+| `budget.enabled` | `true` | Schaltet das Token-Budget mit false ab. |
+| `budget.window` | `8` | Anzahl der zuletzt fertigen Aufgaben gleicher Größe für den Durchschnitt. |
+| `budget.minSamples` | `3` | Mindestanzahl fertiger Aufgaben dieser Größe; darunter läuft die Aufgabe ohne Grenze, während der Durchschnitt kalibriert. |
+| `budget.hardFactor` | `1.5` | Harte Grenze als Vielfaches der Schätzung; beim Erreichen wird der Agent beendet und der Stand geprüft. |
+| `budget.graceFactor` | `1.6` | Äußerste Grenze als Vielfaches der Schätzung, nur nach einer Prüfung mit eindeutigem Abschlusssignal; sonst entscheidet ein Mensch. |
+| `budget.reviewerModel` | `"sonnet"` | Claude-Modell des kurzen Prüflaufs an der harten Grenze. |
 | `fallbackBackoffMinutes` | `30` | Agentensperre in Minuten, wenn der Reset-Zeitpunkt unbekannt ist. |
 | `quotaThresholdPercent` | `97` | Vorab-Sperrgrenze für Kontingentauslastung in Prozent. |
 | `reimportMinutes` | `30` | Jira-Import-Cache und Aktualisierungsintervall für work --jql in Minuten; --reimport erzwingt Import. |

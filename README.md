@@ -307,7 +307,14 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `ollama.timeoutSeconds` | `60` | Timeout per request; on expiry the template text is used. |
 | `autoStartRunner` | `false` | Allow retry/answer to start a background run for the entire state; --start overrides per call. |
 | `maxRunMinutes` | `120` | Agent run timeout in minutes; timeout interrupts task. |
-| `maxAttempts` | `2` | Failed-attempt limit before failed and a blocking question; quota outages do not count. |
+| `maxAttempts` | `2` | Hard limit of failures per task before failed and a blocking question; quota outages do not count. Answers and a plain retry do not reset it, only `retry --force` by a human. The same failure on an unchanged branch content fails at once. |
+| `budget` | object (see child fields) | Token budget per task: an estimate from the moving average of recent finished tasks of the same size, a hard limit, and a review before any extension. |
+| `budget.enabled` | `true` | Turns the token budget off with false. |
+| `budget.window` | `8` | Number of the most recent finished tasks of the same size used for the average. |
+| `budget.minSamples` | `3` | Minimum finished tasks of that size; below it the task runs without a limit while the average calibrates. |
+| `budget.hardFactor` | `1.5` | Hard limit as a multiple of the estimate; reaching it stops the agent and starts the review. |
+| `budget.graceFactor` | `1.6` | Outermost limit as a multiple of the estimate, allowed only after a review found a clear completion signal; without one, a human decides. |
+| `budget.reviewerModel` | `"sonnet"` | Claude model of the short review run at the hard limit. |
 | `fallbackBackoffMinutes` | `30` | Minutes to block an exhausted agent when no reset time is known. |
 | `quotaThresholdPercent` | `97` | Preflight quota-utilization threshold in percent. |
 | `reimportMinutes` | `30` | Jira import cache and work --jql refresh interval in minutes; --reimport forces refresh. |

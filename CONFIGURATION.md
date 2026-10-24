@@ -151,6 +151,7 @@ im Repo-Root enthält die bisherigen Projekteinstellungen.
 | `tickSeconds`, `reimportMinutes` | Scheduler-Intervall und erneuter Aufgabenimport |
 | `autoStartRunner` | Boolean, Default `false`: `retry`/`answer` starten ohne laufenden Runner nur bei `true` einen Hintergrund-Runner für den gesamten State. `--start` erlaubt den Start pro Aufruf. `run`/`work` sind selbst ausdrückliche Startbefehle |
 | `maxRunMinutes`, `maxAttempts`, `fallbackBackoffMinutes` | Laufzeitlimit, Versuche und Rückfallpause |
+| `budget` | Token-Budget je Aufgabe (`enabled`, `window`, `minSamples`, `hardFactor`, `graceFactor`, `reviewerModel`): Schätzung aus dem gleitenden Durchschnitt der letzten fertigen Aufgaben gleicher Größe, harte Grenze bei `hardFactor` (150 %), danach Prüfung; nur bei eindeutigem Abschlusssignal gilt bis `graceFactor` (160 %), sonst entscheidet ein Mensch |
 | `quotaThresholdPercent` | Grenze für die Kontingent-Sperre |
 | `phaseTests.skipEpics`, `phaseTestComposeProject` | Phasentest-Ausnahmen und Compose-Projektname |
 | `codeGraph.python` | Python-Executable für das optionale Graph-MCP |
