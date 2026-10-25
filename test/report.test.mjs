@@ -159,6 +159,10 @@ test('graph card sits beside agents and reports separate indexes and unavailable
   const html = buildReportHtml({ agents: { codex: {} } }, { graphStats, fragmentOnly: true });
   const card = html.slice(html.indexOf('class="agent-card graph-card"'), html.indexOf('<h2>Offene Fragen'));
   assert.match(card, /Code Review Graph/);
+  assert.match(card, /<details class="graph-index" id="graph-index-codex">\s*<summary>/);
+  assert.equal((card.match(/<details class="graph-index"/g) || []).length, 3);
+  assert.doesNotMatch(card, /<details[^>]*\sopen(?:[\s=>])/);
+  assert.match(card, /Die Statistikabfrage liest den vorhandenen Index/);
   assert.match(card, /<dt>Dateien<\/dt><dd>5<\/dd>/);
   assert.match(card, /<dt>Knoten<\/dt><dd>30<\/dd>/);
   assert.match(card, /<dt>Beziehungen<\/dt><dd>40<\/dd>/);

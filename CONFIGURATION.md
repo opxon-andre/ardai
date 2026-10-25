@@ -100,18 +100,36 @@ Die Markenfelder (`brand`) sowie CLI-Aliase und kompatible Config-/Protokoll-
 und Stopp-Label-Namen beschreibt [Branding](README.md#branding). Ein explizites
 `runtimeDir` hat Vorrang vor `brand.runtimeDir`.
 
+## Startdauer untersuchen
+
+`ardai run` protokolliert die Dauer der Worktree-Vorbereitung, der ersten
+Statusauswertung und des gesamten Starts. Vor jedem Agentenlauf erscheinen
+zusätzlich Meldungen für Git-Vorbereitung inklusive Fetch und Graph-Aufbau/Update.
+Git und Graph-Vorbereitung laufen aktuell synchron; langsame Remote-Zugriffe,
+große neue Worktrees oder ein aufwendiger Graph-Aufbau können daher den Start
+beziehungsweise die erste Aufgabenvergabe verzögern. Die Verbrauchsauswertung
+liest das Logverzeichnis einmal für alle Tickets gemeinsam ein.
+
 ## Code-Review-Graph-Statistik
 
 Neben den Agentenkacheln erscheint bei aktiviertem `codeGraph.python` oder einem
 vorhandenen lokalen Index eine eigene Kachel „Code Review Graph“. Sie zeigt pro
 Projekt-/Agenten-Worktree Dateien, Knoten, Beziehungen, Funktionen, Klassen,
 Sprachen, Branch und Indexstand. Die Werte mehrerer Worktrees werden nicht addiert.
+Die Details je Index sind standardmäßig eingeklappt; die Zusammenfassung zeigt
+Name, Dateianzahl und Indexstand. Die gewählte Aufklappansicht bleibt beim
+Aktualisieren erhalten.
 Unvollständige, fehlende oder gerade gesperrte Indizes werden entsprechend markiert.
 Die Abfrage läuft einmal beim ersten Anzeigen im Hintergrund und anschließend nur,
 wenn ein Ticket erfolgreich abgeschlossen und nach `integration` gemergt wurde.
 Regelmäßige UI-Aktualisierungen lösen keine erneute Graph-Abfrage aus.
 Sie liest vorhandene Datenbanken, ohne einen Index aufzubauen oder das Schema zu
 migrieren. Die Statistik misst den Indexbestand, keine geschätzte Tokenersparnis.
+„Statistik abgefragt“ bezeichnet den Lesezeitpunkt, „Indexstand“ die letzte vom
+Graph gespeicherte Indexaktualisierung. Ein erneutes Einlesen erneuert den Index
+nicht: ardai baut/aktualisiert den jeweiligen Agenten-Worktree vor einem Lauf;
+der Graph-MCP läuft dort mit Auto-Watch. Ein vorhandener Index in der Projektwurzel
+wird dadurch nicht automatisch aktualisiert.
 
 ## Pfad-Referenz
 

@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { ReportStatistics } from '../lib/report-statistics.mjs';
+
+test('statistics load in the background, keep cached data and refresh exported totals', async (t) => {
+  const root = fs.mkdtempSync(new URL('.report-statistics-', import.meta.url));
+  const file = path.join(root, 'DEV-1-codex-1000.jsonl');
+  const event = (input) => JSON.stringify({ type: 'turn.completed', usage: { input_tokens: input, cached_input_tokens: 2, output_tokens: 3 } }) + '\n';
+  fs.writeFileSync(file, event(10));
+  let updates = 0;
+  const reader = new ReportStatistics({ logDir: root, agents: { codex: { kind: 'codex' } }, codexSessions: [], qualityFile: path.join(root, 'quality.json') }, () => { updates++; });
+  t.after(async () => { await reader.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const initial = reader.snapshot();
+  assert.equal(initial.loading, true);
+  assert.deepEqual(initial.quality, { loading: true });
+  const pending = reader.pending;
+  reader.snapshot();
+  assert.equal(reader.pending, pending);
+  await pending;
+  const result = reader.snapshot();
+  assert.equal(result.usage['DEV-1'].total, 13);
+  assert.equal(result.agentUsage.codex.input, 10);
+  assert.deepEqual(result.quality, { empty: true });
+  assert.equal(result.loading, false);
+  assert.equal(reader.pending, null);
+  const worker = reader.worker;
+  fs.appendFileSync(file, event(20));
+  assert.equal(reader.snapshot().usage['DEV-1'].total, 13);
+  assert.equal((await reader.fresh()).usage['DEV-1'].total, 36);
+  assert.equal(reader.worker, worker, 'reuse the worker and its parsed log cache');
+  assert.equal(updates, 2);
+  await worker.terminate();
+  await reader.fresh();
+  assert.notEqual(reader.worker, worker);
+  assert.equal(reader.snapshot().usage['DEV-1'].total, 36);
+});

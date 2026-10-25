@@ -32,6 +32,13 @@ test('graph statistics read existing indexes without migrations or duplicate cou
   assert.deepEqual(fs.readFileSync(file), before);
 });
 
+test('a blocked main loop does not time out a completed graph reader', async (t) => {
+  const { file } = fixture(t);
+  const pending = readGraphs([{ name: 'Projekt', file }], { timeoutMs: 1000 });
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+  assert.equal((await pending)[0].status, 'ready');
+});
+
 test('missing, corrupt and busy graph indexes are isolated from healthy ones', async (t) => {
   const { root, file } = fixture(t);
   const missing = path.join(root, 'missing.db'), broken = path.join(root, 'broken.db');

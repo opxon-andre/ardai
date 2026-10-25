@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { taskUsage, agentUsage, capacity, formatTokens, formatDuration } from '../lib/usage.mjs';
+import { taskUsage, projectUsage, agentUsage, capacity, formatTokens, formatDuration } from '../lib/usage.mjs';
 import { parseLogName, tailActivity } from '../lib/activity.mjs';
 
 function fixture(t) {
@@ -127,4 +127,23 @@ test('family token totals count each run once, include imports and refresh parti
   fs.appendFileSync(partial, JSON.stringify({ type: 'result', usage: { input_tokens: 12, cache_read_input_tokens: 20, output_tokens: 8 } }) + '\n');
   totals = agentUsage(root, agents);
   assert.deepEqual(totals.claude, { input: 32, fresh: 12, cached: 20, output: 8, total: 40, final: true, runs: 1 });
+});
+
+test('report usage scans logs once for all tickets and preserves task and family totals', (t) => {
+  const root = fixture(t);
+  const agents = { helper: { kind: 'claude' } };
+  log(root, 'A-codex-1000.jsonl', [{ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } }]);
+  log(root, 'A-codex2-1500.jsonl', [{ type: 'turn.completed', usage: { input_tokens: 20, cached_input_tokens: 5, output_tokens: 3 } }]);
+  const file = log(root, 'B-helper-1800.jsonl', [{ type: 'assistant', message: { id: 'm', usage: { input_tokens: 10, output_tokens: 1 } } }]);
+  const expected = { tasks: Object.fromEntries(['A', 'B'].map((id) => [id, taskUsage(root, id, agents)])), agents: agentUsage(root, agents) };
+  const readdir = fs.readdirSync;
+  let scans = 0;
+  t.mock.method(fs, 'readdirSync', (...args) => { if (args[0] === root) scans++; return readdir(...args); });
+  assert.deepEqual(projectUsage(root, agents), expected);
+  assert.equal(scans, 1);
+  fs.appendFileSync(file, JSON.stringify({ type: 'result', usage: { input_tokens: 12, output_tokens: 4 } }) + '\n');
+  const updated = projectUsage(root, agents);
+  assert.equal(scans, 2);
+  assert.equal(updated.tasks.B.total, 16);
+  assert.equal(updated.agents.claude.total, 16);
 });

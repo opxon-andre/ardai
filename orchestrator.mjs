@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readJson, nowIso, log, expandEnv, sh } from './lib/util.mjs';
+import { readJson, nowIso, log, expandEnv, sh, shAsync } from './lib/util.mjs';
 import { Git, renderPrePushHook } from './lib/git.mjs';
 import { AgentRun, latestCodexRateLimits, familyOverage } from './lib/agents.mjs';
 import { taskPrompt, resumePrompt, importPrompt } from './lib/prompts.mjs';
@@ -26,8 +26,8 @@ import { planPhaseTests } from './lib/phasetests.mjs';
 import { RUNNABLE, depsDone as dependenciesDone, selectTask as selectPlannedTask } from './lib/planning.mjs';
 import { hintsMarkdown, collectHints } from './lib/hints.mjs';
 import { formatLine, listLogs, tailActivity, parseLogName, agentKind } from './lib/activity.mjs';
-import { readQualitySummary } from './lib/quality.mjs';
-import { taskUsage, agentUsage, capacity } from './lib/usage.mjs';
+import { taskUsage } from './lib/usage.mjs';
+import { ReportStatistics } from './lib/report-statistics.mjs';
 import { GraphStatistics } from './lib/graph-stats.mjs';
 import { summarize as summarizeHandoff } from './lib/handoff.mjs';
 import { BUDGET_DEFAULTS, estimateTokens, budgetFor, budgetState, rebaseBudget, failureFingerprint, reviewPrompt, parseVerdict, fmtTokens } from './lib/budget.mjs';
@@ -85,6 +85,11 @@ const verbose = process.argv.includes('--verbose') || process.argv.includes('-v'
 const graphStatistics = new GraphStatistics({ repoRoot, worktreeRoot: git.worktreeRoot,
   agents: config.agents, enabled: Boolean(config.codeGraph?.python),
   onUpdate: () => { try { renderLiveReport(); } catch { /* next report retries */ } } });
+const reportStatistics = new ReportStatistics({ logDir,
+  agents: Object.fromEntries(Object.entries(config.agents).map(([name, agent]) => [name, { kind: agent.kind }])),
+  codexSessions: [...new Set(Object.values(config.agents).filter((a) => a.kind === 'codex' && a.sessionsDir).map((a) => expandEnv(a.sessionsDir)))],
+  qualityFile: config.quality?.summaryFile ? path.resolve(repoRoot, config.quality.summaryFile) : null,
+}, () => { try { renderLiveReport(); } catch { /* next report retries */ } });
 
 // Letzte Schritte jedes laufenden Agenten, gelesen aus seinem aktuellen Log.
 function liveActivity(n = 40) {
@@ -108,15 +113,10 @@ function save() {
 
 // Verbrauch je Aufgabe und Kapazität je Agent – beides aus den Logs gelesen.
 function reportData() {
-  const usage = {};
-  for (const t of state.tasks) {
-    const u = taskUsage(logDir, t.id, config.agents);
-    if (u) usage[t.id] = u;
-  }
-  const codexSessions = [...new Set(Object.values(config.agents).filter((a) => a.kind === 'codex' && a.sessionsDir).map((a) => expandEnv(a.sessionsDir)))];
+  const statistics = reportStatistics.snapshot();
   const { ui: _uiConfig, ...cfg } = config; // "ui" ist hier die Server-Konfiguration, nicht die Seitensteuerung
   const overage = Object.fromEntries(Object.keys(config.agents).map((n) => [n, agentCfgFor(n).allowOverage]));
-  return { ...cfg, usage, agentUsage: agentUsage(logDir, config.agents), graphStats: graphStatistics.snapshot(), quality: readQualitySummary(config.quality?.summaryFile ? path.resolve(repoRoot, config.quality.summaryFile) : null), overage, capacity: capacity(logDir, codexSessions, config.agents) };
+  return { ...cfg, ...statistics, statisticsLoading: statistics.loading, graphStats: graphStatistics.snapshot(), overage };
 }
 
 function renderLiveReport() {
@@ -135,7 +135,8 @@ function scheduleReport() {
 
 // Testbericht als Momentaufnahme unter config.resultsDir.
 // Der Dateiname sortiert lexikalisch = chronologisch (absteigend = neu nach alt).
-function writeResultsSnapshot() {
+async function writeResultsSnapshot() {
+  await reportStatistics.fresh();
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   const base = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
@@ -203,17 +204,20 @@ function selectTask(agent) {
 const activeRuns = new Map();
 let wake = () => {};
 
-function startTask(agent, task) {
+async function startTask(agent, task) {
   const wt = git.ensureWorktree(agent);
+  const gitStarted = performance.now();
+  log(`${task.id}: Git-Vorbereitung für ${agent} (inkl. Fetch) …`);
   try {
-    git.checkoutTaskBranch(wt, task.branch);
+    await git.checkoutTaskBranch(wt, task.branch);
   } catch (err) {
     addNote(task, `Checkout fehlgeschlagen: ${err.message.split('\n')[0]}`);
     log(`${task.id}: Checkout in ${agent}-Worktree fehlgeschlagen`, err.message);
     save();
     return;
   }
-  refreshCodeGraph(wt);
+  log(`${task.id}: Git-Vorbereitung in ${((performance.now() - gitStarted) / 1000).toFixed(1)} s abgeschlossen.`);
+  await refreshCodeGraph(wt);
   fs.rmSync(path.join(wt, '.orchestrator-run'), { recursive: true, force: true });
   fs.mkdirSync(path.join(wt, '.orchestrator-run'), { recursive: true });
 
@@ -275,12 +279,15 @@ function startTask(agent, task) {
 // Graph vor jedem Lauf auf den Stand des Task-Branches bringen: beim ersten
 // Mal Vollaufbau (~25 s), danach inkrementell (~1 s). Fehler sind nicht fatal,
 // der Agent arbeitet dann eben ohne aktuellen Graphen.
-function refreshCodeGraph(wt) {
+async function refreshCodeGraph(wt) {
   const py = config.codeGraph?.python && expandEnv(config.codeGraph.python);
   if (!py) return;
   const hasGraph = fs.existsSync(path.join(wt, '.code-review-graph', 'graph.db'));
-  const res = sh(py, ['-m', 'code_review_graph', hasGraph ? 'update' : 'build', '--repo', wt], { check: false, timeout: 15 * 60_000 });
+  const started = performance.now();
+  log(`${path.basename(wt)}: Code Review Graph ${hasGraph ? 'aktualisieren' : 'aufbauen'} …`);
+  const res = await shAsync(py, ['-m', 'code_review_graph', hasGraph ? 'update' : 'build', '--repo', wt], { check: false, timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024 });
   if (res.code !== 0) log(`code-review-graph ${hasGraph ? 'update' : 'build'} in ${wt} fehlgeschlagen:`, (res.stderr || res.stdout).split('\n').slice(-2).join(' '));
+  else log(`${path.basename(wt)}: Code Review Graph nach ${((performance.now() - started) / 1000).toFixed(1)} s bereit.`);
 }
 
 // Copy only the configured, git-ignored local test secrets for phase tests.
@@ -324,7 +331,7 @@ function readResult(wt) {
   }
 }
 
-function finishTask(agent, task, wt, outcome) {
+async function finishTask(agent, task, wt, outcome) {
   (task.sessions ||= {})[agent] = outcome.sessionId;
   if (stopRequested.delete(task.id)) {
     const budgetKind = budgetStops.get(task.id);
@@ -418,7 +425,7 @@ function finishTask(agent, task, wt, outcome) {
   log(`${task.id}: ${task.status} – ${task.lastNote}`);
   ensurePhaseTests();
   save();
-  if (result?.tests?.length) log(`Testbericht: ${link(writeResultsSnapshot())}`);
+  if (result?.tests?.length) log(`Testbericht: ${link(await writeResultsSnapshot())}`);
 }
 
 function runLimitMinutes(task) {
@@ -539,11 +546,12 @@ async function reviewBudgetStop(task, agent, kind) {
 // Review), wandern automatisch ins Archiv. Nur Git, kein Jira-Aufruf.
 function refreshArchive() {
   let changed = false;
-  for (const task of state.tasks) {
-    if (task.archivedAt || task.keepActive || task.status !== DONE) continue;
+  const candidates = state.tasks.filter((task) => !task.archivedAt && !task.keepActive && task.status === DONE);
+  if (!candidates.length) return false;
+  const merged = git.mergedBranches();
+  for (const task of candidates) {
     const ref = `refs/heads/${task.branch}`;
-    if (!git.branchExists(ref)) continue;
-    if (git.git(repoRoot, ['merge-base', '--is-ancestor', ref, config.baseBranch], { check: false }).code === 0) {
+    if (merged.has(ref)) {
       task.archivedAt = nowIso();
       addNote(task, t('archive.auto', { task: task.id, base: config.baseBranch }));
       log(t('archive.auto', { task: task.id, base: config.baseBranch }));
@@ -629,7 +637,7 @@ async function applyCommand(cmd, args = []) {
     graphStatistics.snapshot();
     await graphStatistics.pending;
     renderLiveReport();
-    return link(writeResultsSnapshot());
+    return link(await writeResultsSnapshot());
   }
   if (cmd === 'sync') {
     for (const action of state.sourceActions || []) delete action.retryAt;
@@ -1134,6 +1142,8 @@ async function cmdRun(args, { source = null } = {}) {
   if (reloadContext?.runner) source = reloadContext.source;
   const other = runnerAlive();
   if (other) { console.error(`Orchestrator läuft bereits (PID ${other}).`); process.exit(1); }
+  const startupStarted = performance.now();
+  log('Start: Laufzeit und Worktrees vorbereiten …');
   isRunner = true;
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(lockFile, String(process.pid));
@@ -1156,7 +1166,10 @@ async function cmdRun(args, { source = null } = {}) {
   for (const a of Object.values(state.agents)) Object.assign(a, { runningTask: null, pid: null });
   git.ensureIntegrationBranch();
   for (const [name, cfg] of Object.entries(config.agents)) if (cfg.enabled) git.ensureWorktree(name);
+  log(`Start: Worktrees nach ${((performance.now() - startupStarted) / 1000).toFixed(1)} s bereit. Statusdaten auswerten …`);
+  const reportStarted = performance.now();
   save();
+  log(`Start: Statusdaten in ${((performance.now() - reportStarted) / 1000).toFixed(1)} s ausgewertet.`);
 
   if (!args.includes('--no-ui') && config.ui?.enabled !== false) uiHandle = await startUi({ open: args.includes('--open') });
 
@@ -1183,7 +1196,7 @@ async function cmdRun(args, { source = null } = {}) {
     if (!scope.size) { log('Keine Aufgaben gefunden.'); process.exit(0); }
     log(`Auftrag: ${[...scope].join(', ')}`);
   }
-  log(`Orchestrator gestartet. Live-Bericht: ${link(reportFile)}`);
+  log(`Orchestrator gestartet. Live-Bericht: ${link(reportFile)} · Startdauer ${((performance.now() - startupStarted) / 1000).toFixed(1)} s`);
 
   // Steuerbefehle (CLI/Web) sofort aufgreifen statt erst beim nächsten Takt.
   setInterval(() => { if (fs.existsSync(inboxFile)) wake(); }, 1000).unref();
@@ -1233,7 +1246,7 @@ async function cmdRun(args, { source = null } = {}) {
       for (const agent of Object.keys(config.agents)) {
         if (activeRuns.has(agent) || !isAvailable(agent)) continue;
         const task = selectTask(agent);
-        if (task) startTask(agent, task);
+        if (task) await startTask(agent, task);
       }
     }
     save();
@@ -1242,7 +1255,7 @@ async function cmdRun(args, { source = null } = {}) {
     if (activeRuns.size) idleAnnounced = false;
     if (source && !shutdownRequested && activeRuns.size === 0 && !idleAnnounced && mine.every((x) => [DONE, 'stopped'].includes(x.status))) {
       await flushSourceActions();
-      writeResultsSnapshot();
+      await writeResultsSnapshot();
       finishOrStayIdle(`Auftrag beendet: ${mine.filter((x) => x.status === DONE).length} fertig und in ${config.integrationBranch}, ${mine.filter((x) => x.status === 'stopped').length} gestoppt.`);
     }
     if (exitWhenIdle && activeRuns.size === 0 && !mine.some((x) => RUNNABLE.has(x.status))) {
@@ -1303,7 +1316,7 @@ function uiHtml(token, fragmentOnly) {
     reloadState();
     if (!runnerAlive() && refreshArchive()) save();
   }
-  return buildReportHtml(state, { ...reportData(), activity: liveActivity(), ui: { t, token, runnerAlive: isRunner || Boolean(runnerAlive()), reloadRequested, instance: String(process.pid) }, fragmentOnly });
+  return buildReportHtml(state, { ...reportData(), activity: liveActivity(), ui: { t, token, lazy: true, runnerAlive: isRunner || Boolean(runnerAlive()), reloadRequested, instance: String(process.pid) }, fragmentOnly });
 }
 
 let uiPort = null;

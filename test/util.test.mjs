@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readJson, writeJsonAtomic, expandEnv, pathsOverlap, sh } from '../lib/util.mjs';
+import { readJson, writeJsonAtomic, expandEnv, pathsOverlap, sh, shAsync } from '../lib/util.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(new URL('.util-', import.meta.url));
@@ -90,4 +90,15 @@ test('environment expansion preserves unknown variables; shell helper reports lo
   const args = ['-e', 'console.error("failed"); process.exit(7)'];
   assert.throws(() => sh(process.execPath, args), (e) => e.result.code === 7 && e.result.stderr === 'failed');
   assert.equal(sh(process.execPath, args, { check: false }).code, 7);
+});
+
+test('asynchronous commands yield to the event loop and preserve failure results', async () => {
+  const pending = shAsync(process.execPath, ['-e', 'setTimeout(() => console.log("done"), 150)']);
+  let responsive = false;
+  await new Promise((resolve) => setTimeout(() => { responsive = true; resolve(); }, 10));
+  assert.equal(responsive, true);
+  assert.deepEqual(await pending, { code: 0, stdout: 'done', stderr: '' });
+  const args = ['-e', 'console.error("failed"); process.exit(7)'];
+  await assert.rejects(shAsync(process.execPath, args), (error) => error.result.code === 7 && error.result.stderr === 'failed');
+  assert.equal((await shAsync(process.execPath, args, { check: false })).code, 7);
 });
