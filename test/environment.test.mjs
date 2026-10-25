@@ -87,3 +87,21 @@ test('LAN mode advertises private interfaces while retaining Host and token chec
   assert.equal(await status('203.0.113.4'), 403);
   assert.equal(await status('attacker.example'), 403);
 });
+
+test('Berichte werden nur mit Token, nur direkt aus dem Ordner und nur als bekannte Dateitypen ausgeliefert', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ardai-reports-'));
+  fs.writeFileSync(path.join(dir, 'bericht.html'), '<p>ok</p>');
+  fs.writeFileSync(path.join(dir, 'geheim.txt'), 'x');
+  const ui = await startServer({ port: 47461, host: '0.0.0.0', reportsDir: dir, t: (k) => k, page: () => 'p', fragment: () => 'f', onAction: () => 'ok' });
+  try {
+    const get = (p, headers = {}) => fetch(`http://127.0.0.1:${ui.port}${p}`, { headers });
+    const ok = await get(`/reports/bericht.html?t=${ui.token}`);
+    assert.equal(ok.status, 200);
+    assert.match(ok.headers.get('content-security-policy'), /sandbox/);
+    assert.equal(await ok.text(), '<p>ok</p>');
+    assert.equal((await get('/reports/bericht.html')).status, 403);
+    assert.equal((await get(`/reports/geheim.txt?t=${ui.token}`)).status, 404);
+    assert.equal((await get(`/reports/..%2Fbericht.html?t=${ui.token}`)).status, 404);
+    assert.equal((await get(`/reports/fehlt.html?t=${ui.token}`)).status, 404);
+  } finally { ui.server.close(); }
+});

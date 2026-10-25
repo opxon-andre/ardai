@@ -1352,6 +1352,7 @@ async function startUi({ open = false } = {}) {
   if (args.includes('--lan')) uiSettings.host = '0.0.0.0';
   const ui = await startServer({
     ...uiSettings,
+    reportsDir: config.quality?.summaryFile ? path.dirname(path.resolve(repoRoot, config.quality.summaryFile)) : null,
     port: reloadContext?.configuredPort === uiSettings.port && reloadContext.port ? reloadContext.port : uiSettings.port,
     token: uiToken(),
     t,

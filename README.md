@@ -309,7 +309,7 @@ Values are JSON; CLI argument arrays are exact defaults.
 | `maxRunMinutes` | `120` | Agent run timeout in minutes; timeout interrupts task. |
 | `maxAttempts` | `2` | Hard limit of failures per task before failed and a blocking question; quota outages do not count. Answers and a plain retry do not reset it, only `retry --force` by a human. The same failure on an unchanged branch content fails at once. |
 | `quality` | object (see child fields) | Optional quality card on the status page, read from a summary file the project writes (schema 1: coverage, findings, gate, links). |
-| `quality.summaryFile` | `null` | Repo-relative path of the quality summary JSON; null hides the card. |
+| `quality.summaryFile` | `null` | Repo-relative path of the quality summary JSON; null hides the card. Plain file names in its links (e.g. `report_url: "semgrep-report.html"`) are served over HTTP as `/reports/<file>` from the same folder (token required, works with any `ARDAI_UI_HOST`). |
 | `budget` | object (see child fields) | Token budget per task: an estimate from the moving average of recent finished tasks of the same size, a hard limit, and a review before any extension. |
 | `budget.enabled` | `true` | Turns the token budget off with false. |
 | `budget.window` | `8` | Number of the most recent finished tasks of the same size used for the average. |

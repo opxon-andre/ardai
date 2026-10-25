@@ -49,3 +49,17 @@ test('configured but missing summary shows a placeholder card', () => {
   assert.match(html, /quality-card/);
   assert.match(html, /noch keine Prüfung gelaufen/);
 });
+
+test('safeUrl erlaubt einfache Berichtsnamen, aber keine Pfade oder Skripte', () => {
+  assert.equal(safeUrl('semgrep-report.html'), 'semgrep-report.html');
+  assert.equal(safeUrl('../x.html'), '');
+  assert.equal(safeUrl('javascript:alert(1)'), '');
+  assert.equal(safeUrl('a/b.html'), '');
+});
+
+test('Berichtslinks sind relativ mit Token und funktionieren unabhängig von der Host-Bindung', () => {
+  const q = normalizeQualitySummary({ ...raw(), report_url: 'semgrep-report.html' });
+  const html = buildReportHtml({ agents: {} }, { quality: q, fragmentOnly: true, ui: { token: 'tok en', t: (k) => k } });
+  assert.match(html, /href="\/reports\/semgrep-report\.html\?t=tok%20en"/);
+  assert.doesNotMatch(buildReportHtml({ agents: {} }, { quality: q, fragmentOnly: true }), /semgrep-report\.html/);
+});

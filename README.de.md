@@ -312,7 +312,7 @@ Werte sind JSON; die CLI-Argumentlisten sind die exakten Defaults.
 | `maxRunMinutes` | `120` | Agenten-Laufzeitlimit in Minuten; Timeout unterbricht die Aufgabe. |
 | `maxAttempts` | `2` | Harte Fehlschlaggrenze je Aufgabe vor failed und blockierender Frage; Kontingent-Outages zählen nicht. Antworten und ein einfaches retry setzen sie nicht zurück, nur `retry --force` durch den Menschen. Derselbe Fehler auf unverändertem Branch-Inhalt führt sofort zu failed. |
 | `quality` | Objekt (siehe Kindfelder) | Optionale Qualitätskachel auf der Statusseite, gelesen aus einer Zusammenfassungsdatei, die das Projekt schreibt (Schema 1: Coverage, Befunde, Gate, Links). |
-| `quality.summaryFile` | `null` | Repo-relativer Pfad der Qualitäts-Zusammenfassung (JSON); null blendet die Kachel aus. |
+| `quality.summaryFile` | `null` | Repo-relativer Pfad der Qualitäts-Zusammenfassung (JSON); null blendet die Kachel aus. Einfache Dateinamen in den Links (z. B. `report_url: "semgrep-report.html"`) werden per HTTP als `/reports/<Datei>` aus demselben Ordner ausgeliefert (Token nötig, funktioniert mit jedem `ARDAI_UI_HOST`). |
 | `budget` | Objekt (siehe Kindfelder) | Token-Budget je Aufgabe: Schätzung aus dem gleitenden Durchschnitt der letzten fertigen Aufgaben gleicher Größe, harte Grenze und Prüfung vor jeder Verlängerung. |
 | `budget.enabled` | `true` | Schaltet das Token-Budget mit false ab. |
 | `budget.window` | `8` | Anzahl der zuletzt fertigen Aufgaben gleicher Größe für den Durchschnitt. |
