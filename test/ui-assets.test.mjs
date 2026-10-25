@@ -161,3 +161,35 @@ test('task sorting handles natural ticket order, all fields, reset and live refr
   vm.runInNewContext(STATIC_SCRIPT.replace('__REFRESH__', '60'), context);
   assert.deepEqual(order(), ['DEV-1', 'DEV-2', 'DEV-10'], 'saved choice also works in file reports');
 });
+
+test('mobile tabs persist across lazy updates and support keyboard navigation', async () => {
+  const names = ['overview', 'tasks', 'questions', 'tests', 'activity'], storage = new Map();
+  let tabs, panels, interval, requests = 0;
+  function element(attrs) {
+    return { attrs, listeners: {}, getAttribute(key) { return this.attrs[key]; },
+      setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(key, fn) { this.listeners[key] = fn; }, focus() { this.focused = true; } };
+  }
+  function render() { tabs = names.map((name) => element({ 'data-mobile-tab': name })); panels = names.map((name) => element({ 'data-mobile-panel': name })); }
+  render();
+  const app = { set innerHTML(value) { render(); } };
+  vm.runInNewContext(UI_SCRIPT, {
+    document: { querySelector: () => null, querySelectorAll: (selector) => selector === '[data-mobile-tab]' ? tabs : selector === '[data-mobile-panel]' ? panels : [],
+      getElementById: (id) => id === 'app' ? app : null, addEventListener() {} },
+    window: { ORCHESTRATOR: { lazy: true, texts: {} }, scrollTo() {} },
+    localStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
+    setInterval: (fn) => { interval = fn; }, setTimeout() {}, clearTimeout() {},
+    fetch: async () => { requests++; return { ok: true, text: async () => 'new fragment' }; },
+  });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  await settle();
+  assert.equal(requests, 1, 'lazy page requests content immediately');
+  tabs[1].listeners.click();
+  assert.equal(panels[1].attrs['data-mobile-active'], 'true');
+  assert.equal(panels[0].attrs['data-mobile-active'], 'false');
+  interval(); await settle();
+  assert.equal(tabs[1].attrs['aria-selected'], 'true');
+  assert.equal(storage.get('ardai-mobile-tab'), 'tasks');
+  tabs[1].listeners.keydown({ key: 'ArrowRight', preventDefault() {} });
+  assert.equal(tabs[2].attrs['aria-selected'], 'true');
+  assert.equal(tabs[2].focused, true);
+});

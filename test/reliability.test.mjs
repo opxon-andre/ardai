@@ -479,3 +479,41 @@ test('runner executes two Codex tasks concurrently in separate worktrees', async
     await until(() => child.exitCode !== null || child.signalCode !== null, 'Runner did not exit');
   }
 });
+
+test('web UI responds while task preparation is waiting on Git fetch', async (t) => {
+  const f = fixture(t);
+  initGit(f.root);
+  const gate = path.join(f.root, 'release-fetch'), marker = path.join(f.root, 'fetch-started');
+  const ssh = path.join(f.root, 'fake-ssh.mjs');
+  fs.writeFileSync(ssh, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, String(process.pid)); setInterval(() => { if (fs.existsSync(${JSON.stringify(gate)})) process.exit(1); }, 25);`);
+  success(spawnSync('git', ['-C', f.root, 'remote', 'add', 'origin', 'ssh://example.invalid/fixture'], { encoding: 'utf8', windowsHide: true }));
+  const cfg = JSON.parse(fs.readFileSync(path.join(f.root, CONFIG_NAME)));
+  Object.assign(cfg, { worktreeRoot: 'worktrees', tickSeconds: 0.05, maxAttempts: 1, checkpointMinutes: 0, ui: { port: 47561 }, budget: { enabled: false } });
+  cfg.agents.codex = { enabled: true, command: process.execPath, commandPrefix: ['-e', 'process.stdin.resume(); process.stdin.on("end", () => process.exit(1));', '--'], args: ['exec'], sessionsDir: path.join(f.root, 'sessions') };
+  cfg.agents.codex2 = { enabled: false };
+  fs.writeFileSync(path.join(f.root, CONFIG_NAME), JSON.stringify(cfg));
+  Object.assign(f.state.tasks[0], { status: 'ready', branch: 'task/slow-fetch' });
+  f.write();
+  const quote = (s) => "'" + s.replace(/\\/g, '/').replace(/'/g, "'\"'\"'") + "'";
+  const env = { ...process.env, GIT_SSH_COMMAND: `${quote(process.execPath)} ${quote(ssh)}`, GIT_SSH_VARIANT: 'ssh', GIT_TERMINAL_PROMPT: '0' };
+  delete env.ORCHESTRATOR_CONFIG;
+  const child = spawn(process.execPath, [cli, 'run'], { cwd: f.root, env, windowsHide: true });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; }); child.stderr.on('data', (chunk) => { output += chunk; });
+  try {
+    await until(() => fs.existsSync(marker), 'Git did not begin waiting: ' + output);
+    const url = output.match(/http:\/\/127\.0\.0\.1:\d+\/\?t=[A-Za-z0-9_-]+/)?.[0];
+    assert.ok(url, output);
+    const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /data-mobile-tab="tasks"/);
+    assert.equal(fs.existsSync(gate), false, 'page rendered while fetch was still pending');
+    fs.writeFileSync(gate, 'finish');
+    await until(() => f.read().tasks[0].status === 'failed', 'Mock task did not finish: ' + output);
+    success(run(f.root, 'stop'));
+    await until(() => child.exitCode !== null, 'Runner did not stop');
+  } finally {
+    fs.writeFileSync(gate, 'finish'); child.kill();
+    await until(() => child.exitCode !== null || child.signalCode !== null, 'Runner did not exit');
+  }
+});

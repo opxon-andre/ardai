@@ -100,14 +100,43 @@ Die Markenfelder (`brand`) sowie CLI-Aliase und kompatible Config-/Protokoll-
 und Stopp-Label-Namen beschreibt [Branding](README.md#branding). Ein explizites
 `runtimeDir` hat Vorrang vor `brand.runtimeDir`.
 
+## Handy, LAN und VPN
+
+Mit `ardai run --lan` oder `ardai serve --lan` lauscht die Oberfläche auf allen
+IPv4-Schnittstellen. Beim Start erscheinen unter `LAN / VPN` die Zugriffslinks
+mit Token für die erkannten privaten LAN- und VPN-Adressen. Einen solchen Link
+auf dem Handy im gleichen Netz oder über eine ins LAN geroutete VPN-Verbindung
+öffnen. Der Standard ohne `--lan` bleibt `127.0.0.1:4711`.
+
+Dauerhaft lässt sich im Projektverzeichnis in `.env` setzen:
+
+```dotenv
+ARDAI_UI_HOST=0.0.0.0
+ARDAI_UI_PORT=4711
+```
+
+Das gilt auch für Compose mit Host-Netzwerk. Für einen eigenen lokalen DNS-Namen
+diesen unter `ARDAI_UI_ALLOWED_HOSTS` ergänzen, zum Beispiel `ardai.lan`.
+Eine feste DHCP-Zuweisung im Router hält die IP-Adresse stabil. Die Host-Firewall
+muss eingehendes TCP auf Port 4711 aus LAN beziehungsweise VPN erlauben.
+Es ist keine Portfreigabe ins Internet nötig. Die vorhandene Token-Anmeldung und
+die Prüfung des HTTP-Host-Headers bleiben aktiv.
+
+Bis 760 Pixel Breite teilt die Oberfläche sich in Übersicht, Aufgaben, Fragen,
+Tests und Verlauf auf. Die Tab-Auswahl bleibt beim Nachladen erhalten. Kacheln
+stehen untereinander und breite Tabellen lassen sich horizontal wischen.
+Auf dem Desktop bleiben alle Bereiche und vier gleich breite Kacheln sichtbar.
+
 ## Startdauer untersuchen
 
 `ardai run` protokolliert die Dauer der Worktree-Vorbereitung, der ersten
 Statusauswertung und des gesamten Starts. Vor jedem Agentenlauf erscheinen
 zusätzlich Meldungen für Git-Vorbereitung inklusive Fetch und Graph-Aufbau/Update.
-Git und Graph-Vorbereitung laufen aktuell synchron; langsame Remote-Zugriffe,
-große neue Worktrees oder ein aufwendiger Graph-Aufbau können daher den Start
-beziehungsweise die erste Aufgabenvergabe verzögern. Die Verbrauchsauswertung
+Git-Fetch, Branch-Vorbereitung und Graph-Aufbau laufen asynchron; die Oberfläche
+bleibt währenddessen erreichbar. Verbrauch, Kontingente und Qualität werden in
+einem separaten Worker berechnet und nachgeladen. Die Archivprüfung verwendet
+eine gemeinsame Git-Abfrage für alle Aufgaben. Neue Worktrees können bei der
+einmaligen Erstellung weiterhin etwas Zeit benötigen. Die Verbrauchsauswertung
 liest das Logverzeichnis einmal für alle Tickets gemeinsam ein.
 
 ## Code-Review-Graph-Statistik

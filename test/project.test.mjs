@@ -175,6 +175,25 @@ test('agent inheritance rejects unknown parents and cycles', () => {
   assert.throws(() => resolveAgents({ a: { extends: 'b' }, b: { extends: 'a' } }), /cycle/);
 });
 
+test('batch archive lookup excludes missing and unmerged task branches', (t) => {
+  const root = fixture(t);
+  const git = (...args) => {
+    const r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true });
+    assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+  };
+  git('init', '-b', 'main');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'base');
+  git('branch', 'task/merged');
+  git('switch', '-c', 'task/unmerged');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'unmerged');
+  git('switch', 'main');
+  const instance = new Git(root, { baseBranch: 'main', worktreeRoot: 'worktrees' });
+  const merged = instance.mergedBranches();
+  assert.ok(merged.has('refs/heads/task/merged'));
+  assert.equal(merged.has('refs/heads/task/unmerged'), false);
+  assert.equal(merged.has('refs/heads/task/deleted'), false);
+});
+
 test('legacy state is unchanged on read and backed up exactly once on first save', (t) => {
   const file = path.join(fixture(t), 'state.json');
   const legacy = { tasks: [{ id: 'A', status: 'interrupted', history: [{ note: 'keep' }] }], agents: { codex: { blockedUntil: '2030-01-01' } }, questions: [], testResults: [], nextQuestion: 4, extra: 'keep' };

@@ -1349,6 +1349,7 @@ function uiToken() {
 
 async function startUi({ open = false } = {}) {
   const uiSettings = uiEnvironment(config.ui);
+  if (args.includes('--lan')) uiSettings.host = '0.0.0.0';
   const ui = await startServer({
     ...uiSettings,
     port: reloadContext?.configuredPort === uiSettings.port && reloadContext.port ? reloadContext.port : uiSettings.port,
@@ -1390,6 +1391,7 @@ async function startUi({ open = false } = {}) {
   });
   uiPort = ui.port;
   log(t('serve.url', { url: ui.url }));
+  for (const url of ui.lanUrls) log(`LAN / VPN: ${url}`);
   if (open) openBrowser(ui.url, { onError: (error) => log('Browser:', error.message, ui.url) });
   return ui;
 }
@@ -1571,7 +1573,7 @@ function printHelp(brand = DEFAULT_BRAND) {
     `  ${brand.cli} work <KEY...>               Tickets importieren und bis zum Ende bearbeiten`,
     `  ${brand.cli} work --jql "<JQL>"          alle Tickets einer JQL-Abfrage, alle 30 min neu abgefragt`,
     `  ${brand.cli} import <KEY...>|--jql|--file  nur importieren (zum Prüfen)`,
-    `  ${brand.cli} run [--exit-when-idle]      alles im State abarbeiten (work/run mit -v: Verlauf im Terminal)`,
+    `  ${brand.cli} run [--lan] [--exit-when-idle] alles im State abarbeiten (work/run mit -v: Verlauf im Terminal)`,
     `  ${brand.cli} status                      Stand und offene Fragen`,
     `  ${brand.cli} log [TASK|AGENT] [-f] [-n N]  Verlauf der Agenten wie im Chat (-f: live folgen)`,
     `  ${brand.cli} answer <Q-ID> "<Text>"      Frage beantworten / Hinweis widersprechen`,
@@ -1585,7 +1587,7 @@ function printHelp(brand = DEFAULT_BRAND) {
     `  ${brand.cli} retry <TASK-ID> [--start]   gestoppte/gescheiterte Aufgabe fortsetzen`,
     `  ${brand.cli} stop [TASK-ID]              Agent abbrechen, Arbeit auf dem Branch sichern (ohne ID: alles, ${brand.name} endet)`,
     `  ${brand.cli} clean <TASK-ID>             Aufgabe verwerfen: Branch löschen, Ticket auf To Do`,
-    `  ${brand.cli} serve [--no-open]           Web-Oberfläche (auch ohne laufenden Auftrag)`,
+    `  ${brand.cli} serve [--lan] [--no-open]   Web-Oberfläche (auch ohne laufenden Auftrag)`,
     `  ${brand.cli} overage <agent> on|off      kostenpflichtige Kontingente für einen Agenten erlauben (Standard: off)`,
     `  ${brand.cli} archive|unarchive <TASK-ID> [...] Aufgaben ins Archiv / zurückholen (fertige Aufgaben in main: automatisch)`,
     `  ${brand.cli} report                      Testbericht nach resultsDir schreiben`,

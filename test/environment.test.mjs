@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import os from 'node:os';
+import { localAddresses } from '../lib/network.mjs';
 import { loadEnvironment, uiEnvironment } from '../lib/environment.mjs';
 import { startServer } from '../lib/server.mjs';
 
@@ -62,4 +64,26 @@ test('explicit remote bind retains token checks and Host protection', async (t) 
   assert.equal(await status(ui.url, { headers: { Host: 'ardai.example.test' } }), 200);
   assert.equal(await status(ui.url.split('?')[0], { headers: { Host: 'ardai.example.test' } }), 403);
   assert.equal(await status(new URL('/api/reload', ui.url), { method: 'POST', headers: { Host: 'ardai.example.test' } }), 403);
+});
+
+test('LAN mode advertises private interfaces while retaining Host and token checks', async (t) => {
+  const interfaces = { lan: [{ address: '192.168.50.4', internal: false }, { address: '192.168.50.4', internal: false }],
+    vpn: [{ address: '100.90.1.2', internal: false }], loopback: [{ address: '127.0.0.1', internal: true }],
+    public: [{ address: '203.0.113.4', internal: false }] };
+  assert.deepEqual(localAddresses(interfaces), ['192.168.50.4', '100.90.1.2']);
+  t.mock.method(os, 'networkInterfaces', () => interfaces);
+  const ui = await startServer({ port: 47443, host: '0.0.0.0', t: (k) => k,
+    page: () => 'page', fragment: () => 'fragment', onAction: () => 'done', token: 'fixture-token' });
+  t.after(() => ui.server.close());
+  assert.equal(ui.lanUrls.length, 2);
+  assert.ok(ui.lanUrls[0].startsWith('http://192.168.50.4:'));
+  const status = (host, token = true) => new Promise((resolve, reject) => {
+    const req = http.request(`http://127.0.0.1:${ui.port}/${token ? '?t=fixture-token' : ''}`, { headers: { Host: `${host}:${ui.port}` } }, (res) => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject); req.end();
+  });
+  assert.equal(await status('192.168.50.4'), 200);
+  assert.equal(await status('100.90.1.2'), 200);
+  assert.equal(await status('192.168.50.4', false), 403);
+  assert.equal(await status('203.0.113.4'), 403);
+  assert.equal(await status('attacker.example'), 403);
 });
